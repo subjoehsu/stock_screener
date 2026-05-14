@@ -97,8 +97,22 @@ def fetch_yfinance(
 # ── Taiwan stocks ─────────────────────────────────────────
 
 def fetch_tw(stock_id: str, interval: str = "15m", days: int = 59) -> pd.DataFrame | None:
-    """Fetch a Taiwan stock (TWSE) using Yahoo Finance .TW suffix."""
-    return fetch_yfinance(f"{stock_id}.TW", interval=interval, days=days)
+    """
+    Fetch a Taiwan stock via Yahoo Finance.
+
+    stock_id can be:
+      • A raw code    e.g. "2330"     → tries 2330.TW first, then 2330.TWO
+      • A full ticker e.g. "2330.TW"  → used directly (上市)
+                          "6230.TWO"  → used directly (上櫃)
+    """
+    if "." in stock_id:
+        # Already carries the exchange suffix — use as-is
+        return fetch_yfinance(stock_id, interval=interval, days=days)
+    # Raw code: try 上市 (.TW) first, fall back to 上櫃 (.TWO)
+    df = fetch_yfinance(f"{stock_id}.TW", interval=interval, days=days)
+    if df is None:
+        df = fetch_yfinance(f"{stock_id}.TWO", interval=interval, days=days)
+    return df
 
 
 # ── US stocks ─────────────────────────────────────────────

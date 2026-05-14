@@ -158,8 +158,8 @@ with st.sidebar:
 
     b_st,  _       = _row("SuperTREX 買點",        key_chk="b_st")
     b_st_h         = st.number_input(
-        "  ↳ 窗口（小時）", min_value=1, max_value=720, value=120, step=24,
-        key="b_st_h", help="120h ≈ 5 交易日",
+        "  ↳ 窗口（小時）", min_value=1, max_value=720, value=5, step=1,
+        key="b_st_h", help="5h = 買點出現於近 5 小時內；120h ≈ 5 交易日",
     )
     b_mac, _       = _row("MACD 黃金交叉",          key_chk="b_mac")
     b_rsi, b_rsi_v = _row("RSI >", has_val=True, val_default=50.0,
@@ -169,7 +169,7 @@ with st.sidebar:
     b_vol, b_vol_v = _row("成交量 > 均量 ×", has_val=True, val_default=1.5,
                            val_min=1.0, val_max=10.0,
                            key_chk="b_vol", key_val="b_vol_v")
-    b_mp,  b_mp_v  = _row("收盤價 >", default=False, has_val=True, val_default=10.0,
+    b_mp,  b_mp_v  = _row("收盤價 >", default=True, has_val=True, val_default=15.0,
                            val_min=0.0, val_max=100000.0,
                            key_chk="b_mp", key_val="b_mp_v")
 
@@ -186,15 +186,15 @@ with st.sidebar:
 
     s_st,  _       = _row("SuperTREX 賣點",         key_chk="s_st")
     s_st_h         = st.number_input(
-        "  ↳ 窗口（小時）", min_value=1, max_value=720, value=120, step=24,
-        key="s_st_h", help="120h ≈ 5 交易日",
+        "  ↳ 窗口（小時）", min_value=1, max_value=720, value=5, step=1,
+        key="s_st_h", help="5h = 賣點出現於近 5 小時內",
     )
     s_mac, _       = _row("MACD 死亡交叉",           key_chk="s_mac")
     s_rsi, s_rsi_v = _row("RSI <", has_val=True, val_default=45.0,
                            val_min=1.0, val_max=99.0,
                            key_chk="s_rsi", key_val="s_rsi_v")
     s_ma,  _       = _row(f"跌破 MA{int(ma_period)}", key_chk="s_ma")
-    s_mp,  s_mp_v  = _row("收盤價 <", default=False, has_val=True, val_default=10.0,
+    s_mp,  s_mp_v  = _row("收盤價 <", default=True, has_val=True, val_default=15.0,
                            val_min=0.0, val_max=100000.0,
                            key_chk="s_mp", key_val="s_mp_v")
 
@@ -481,8 +481,8 @@ with tab_bt:
 
         bt_b_st, _         = _row("SuperTREX 買點",          key_chk="bt_b_st")
         bt_b_st_h          = st.number_input(
-            "  ↳ 窗口（小時）", min_value=1, max_value=720, value=120,
-            step=24, key="bt_b_st_h", help="120h ≈ 5 交易日",
+            "  ↳ 窗口（小時）", min_value=1, max_value=720, value=5,
+            step=1, key="bt_b_st_h", help="5h = 買點出現於近 5 小時內",
         )
         bt_b_mac, _        = _row("MACD 黃金交叉",            key_chk="bt_b_mac")
         bt_b_rsi, bt_b_rsi_v = _row(
@@ -495,7 +495,7 @@ with tab_bt:
             val_min=1.0, val_max=10.0, key_chk="bt_b_vol", key_val="bt_b_vol_v",
         )
         bt_b_mp, bt_b_mp_v = _row(
-            "收盤價 >", default=False, has_val=True, val_default=10.0,
+            "收盤價 >", default=True, has_val=True, val_default=15.0,
             val_min=0.0, val_max=100000.0, key_chk="bt_b_mp", key_val="bt_b_mp_v",
         )
 
@@ -510,8 +510,8 @@ with tab_bt:
 
         bt_s_st, _         = _row("SuperTREX 賣點",           key_chk="bt_s_st")
         bt_s_st_h          = st.number_input(
-            "  ↳ 窗口（小時）", min_value=1, max_value=720, value=120,
-            step=24, key="bt_s_st_h", help="120h ≈ 5 交易日",
+            "  ↳ 窗口（小時）", min_value=1, max_value=720, value=5,
+            step=1, key="bt_s_st_h", help="5h = 賣點出現於近 5 小時內",
         )
         bt_s_mac, _        = _row("MACD 死亡交叉",             key_chk="bt_s_mac")
         bt_s_rsi, bt_s_rsi_v = _row(
@@ -520,7 +520,7 @@ with tab_bt:
         )
         bt_s_ma, _         = _row(f"跌破 MA{int(bt_ma_p)}",   key_chk="bt_s_ma")
         bt_s_mp, bt_s_mp_v = _row(
-            "收盤價 <", default=False, has_val=True, val_default=10.0,
+            "收盤價 <", default=True, has_val=True, val_default=15.0,
             val_min=0.0, val_max=100000.0, key_chk="bt_s_mp", key_val="bt_s_mp_v",
         )
 

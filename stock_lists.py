@@ -171,9 +171,8 @@ TW_STATIC: dict[str, str] = {
 
 def _fetch_twse_json() -> dict[str, str]:
     """
-    TWSE OpenData JSON API — returns all listed stocks for today.
-    Works from any server (no HTML/Big5 parsing needed).
-    Returns empty dict on non-trading days or failure.
+    TWSE OpenData JSON API — 上市普通股，回傳 {code.TW: name}。
+    Non-trading days or failure → empty dict.
     """
     url = "https://opendata.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -186,7 +185,7 @@ def _fetch_twse_json() -> dict[str, str]:
             name = str(item.get("證券名稱", "")).strip()
             # Only numeric 4-5 digit codes NOT starting with 0 (excludes ETFs)
             if code.isdigit() and not code.startswith("0") and 4 <= len(code) <= 5:
-                result[code] = name
+                result[f"{code}.TW"] = name          # 上市 → .TW
         return result
     except Exception as exc:
         logger.warning("TWSE JSON API failed: %s", exc)
@@ -195,7 +194,7 @@ def _fetch_twse_json() -> dict[str, str]:
 
 def _fetch_tpex_json() -> dict[str, str]:
     """
-    TPEx OpenData JSON API — OTC (上櫃) listed stocks.
+    TPEx OpenData JSON API — 上櫃普通股，回傳 {code.TWO: name}。
     Returns empty dict on failure.
     """
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
@@ -205,13 +204,12 @@ def _fetch_tpex_json() -> dict[str, str]:
         data = resp.json()
         result: dict[str, str] = {}
         for item in data:
-            # Try different possible field names
             code = str(item.get("SecuritiesCompanyCode",
                         item.get("Code", ""))).strip()
             name = str(item.get("CompanyName",
                         item.get("Name", code))).strip()
             if code.isdigit() and not code.startswith("0") and 4 <= len(code) <= 5:
-                result[code] = name
+                result[f"{code}.TWO"] = name          # 上櫃 → .TWO
         return result
     except Exception as exc:
         logger.warning("TPEx JSON API failed: %s", exc)
@@ -221,27 +219,28 @@ def _fetch_tpex_json() -> dict[str, str]:
 def fetch_tw_stocks(include_tpex: bool = True) -> dict[str, str]:
     """
     Fetch Taiwan listed stocks.
+    Keys are full yfinance tickers:  上市 → XXXX.TW  /  上櫃 → XXXX.TWO
+
     Strategy:
-      1. Try TWSE JSON OpenData  (works every trading day)
-      2. Try TPEx JSON OpenData  (works every trading day)
-      3. Merge with static TW_STATIC for any missing stocks
-    Returns the most comprehensive list available.
+      1. TWSE JSON OpenData  → {code.TW:  name}
+      2. TPEx JSON OpenData  → {code.TWO: name}
+      3. TW_STATIC fallback  → add as code.TW if neither suffix is present yet
     """
     result: dict[str, str] = {}
 
     twse = _fetch_twse_json()
     result.update(twse)
-    logger.info("TWSE JSON: %d stocks", len(twse))
+    logger.info("TWSE JSON: %d stocks (.TW)", len(twse))
 
     if include_tpex:
         tpex = _fetch_tpex_json()
         result.update(tpex)
-        logger.info("TPEx JSON: %d stocks", len(tpex))
+        logger.info("TPEx JSON: %d stocks (.TWO)", len(tpex))
 
-    # Always merge in static list to fill gaps (non-trading days, etc.)
+    # Static fallback: only add if NEITHER suffix is already present
     for code, name in TW_STATIC.items():
-        if code not in result:
-            result[code] = name
+        if f"{code}.TW" not in result and f"{code}.TWO" not in result:
+            result[f"{code}.TW"] = name   # TW_STATIC 均為上市，用 .TW
 
     logger.info("Total TW stocks: %d", len(result))
     return result

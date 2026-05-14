@@ -154,8 +154,11 @@ def _analyze(
     buy_sigs  = evaluate_buy(df, cfg)
     sell_sigs = evaluate_sell(df, cfg)
 
+    # Display code: strip exchange suffix (e.g. "2330.TW" → "2330")
+    display_id = stock_id.split(".")[0] if market == "TW" else stock_id
+
     return {
-        "stock_id":   stock_id,
+        "stock_id":   display_id,
         "name":       name,
         "market":     market,
         "close":      round(float(last["Close"]), 2),
@@ -221,7 +224,8 @@ def run_screener(
             done[0] += 1
             t = fut_map[fut]
             if progress_callback:
-                progress_callback(done[0], total, f"{t[2]}:{t[0]}")
+                label = t[0].split(".")[0] if t[2] == "TW" else t[0]
+                progress_callback(done[0], total, f"{t[2]}:{label}")
 
             try:
                 result = fut.result()
