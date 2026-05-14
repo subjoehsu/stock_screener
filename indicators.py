@@ -163,10 +163,11 @@ def add_rsi(df: pd.DataFrame, period: int = 13) -> pd.DataFrame:
 
 # ── Moving averages ───────────────────────────────────────
 
-def add_moving_averages(df: pd.DataFrame) -> pd.DataFrame:
+def add_moving_averages(df: pd.DataFrame, ma_period: int = 20) -> pd.DataFrame:
+    """MA period is configurable (default 20). Stored as df['ma'] and df['vol_ma']."""
     df = df.copy()
-    df["ma20"]     = df["Close"].rolling(20).mean()
-    df["vol_ma20"] = df["Volume"].rolling(20).mean()
+    df["ma"]     = df["Close"].rolling(ma_period).mean()
+    df["vol_ma"] = df["Volume"].rolling(ma_period).mean()
     return df
 
 
@@ -177,6 +178,7 @@ def add_all_indicators(
     base_interval: str = "15m",
     macd_tf: str = "same",
     rsi_tf:  str = "same",
+    ma_period: int = 20,
 ) -> pd.DataFrame:
     """
     Calculate all indicators on df.
@@ -187,7 +189,7 @@ def add_all_indicators(
     macd_tf       : Timeframe for MACD. 'same' → use base_interval.
     rsi_tf        : Timeframe for RSI.  'same' → use base_interval.
     """
-    df = add_moving_averages(df)
+    df = add_moving_averages(df, ma_period=ma_period)
     df = add_supertrex(df)
 
     # ── MACD ──

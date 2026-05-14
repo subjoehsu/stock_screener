@@ -68,12 +68,13 @@ def evaluate_buy(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
         signals[f"RSI>{int(thr)}"] = bool(last.get("rsi", 50) > thr)
 
     if cfg.get("buy_price_above_ma", True):
-        ma = last.get("ma20")
-        signals["收盤>MA20"] = bool(last["Close"] > ma) if pd.notna(ma) else False
+        ma  = last.get("ma")
+        mp  = cfg.get("ma_period", 20)
+        signals[f"收盤>MA{mp}"] = bool(last["Close"] > ma) if pd.notna(ma) else False
 
     if cfg.get("buy_volume_spike", True):
-        mult    = cfg.get("buy_volume_mult", 1.5)
-        vol_ma  = last.get("vol_ma20")
+        mult   = cfg.get("buy_volume_mult", 1.5)
+        vol_ma = last.get("vol_ma")
         signals[f"成交量>{mult}x均量"] = (
             bool(last["Volume"] > vol_ma * mult) if pd.notna(vol_ma) else False
         )
@@ -102,8 +103,9 @@ def evaluate_sell(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
         signals[f"RSI<{int(thr)}"] = bool(last.get("rsi", 50) < thr)
 
     if cfg.get("sell_price_below_ma", True):
-        ma = last.get("ma20")
-        signals["跌破MA20"] = bool(last["Close"] < ma) if pd.notna(ma) else False
+        ma  = last.get("ma")
+        mp  = cfg.get("ma_period", 20)
+        signals[f"跌破MA{mp}"] = bool(last["Close"] < ma) if pd.notna(ma) else False
 
     if cfg.get("sell_min_price", False):
         val = cfg.get("sell_min_price_value", 0)
@@ -131,8 +133,9 @@ def _analyze(
         df = add_all_indicators(
             df,
             base_interval=interval,
-            macd_tf=cfg.get("macd_tf", "same"),
-            rsi_tf =cfg.get("rsi_tf",  "same"),
+            macd_tf=cfg.get("macd_tf",   "same"),
+            rsi_tf =cfg.get("rsi_tf",    "same"),
+            ma_period=cfg.get("ma_period", 20),
         )
     except Exception as exc:
         logger.warning("Indicator error [%s %s]: %s", market, stock_id, exc)
@@ -155,7 +158,7 @@ def _analyze(
         "close":      round(float(last["Close"]), 2),
         "change_pct": round(chg, 2),
         "rsi":        round(float(last.get("rsi", 50)), 1),
-        "ma20":       round(float(last["ma20"]), 2)      if pd.notna(last.get("ma20"))     else None,
+        "ma":         round(float(last["ma"]), 2)          if pd.notna(last.get("ma"))       else None,
         "macd_hist":  round(float(last["macd_hist"]), 4) if pd.notna(last.get("macd_hist")) else None,
         "supertrex":  "買入區 ▲" if last["st_dir"] == 1 else "賣出區 ▼",
         "buy_sigs":   buy_sigs,
@@ -218,7 +221,7 @@ def run_screener(
                 "收盤價":    result["close"],
                 "漲跌幅(%)": result["change_pct"],
                 "RSI":       result["rsi"],
-                "MA20":      result["ma20"],
+                f"MA{cfg.get('ma_period',20)}": result["ma"],
                 "MACD柱狀":  result["macd_hist"],
                 "SuperTREX": result["supertrex"],
             }

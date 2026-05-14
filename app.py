@@ -21,7 +21,7 @@ import streamlit as st
 
 from excel_export import build_excel
 from screener import run_screener
-from stock_lists import fetch_tw_stocks, fetch_us_stocks
+from stock_lists import fetch_tw_stocks, fetch_us_stocks, DJIA, NASDAQ100
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -42,8 +42,8 @@ def _load_tw(include_tpex: bool) -> dict[str, str]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_us() -> dict[str, str]:
-    return fetch_us_stocks()
+def _load_us(sp500: bool, nasdaq: bool, djia: bool) -> dict[str, str]:
+    return fetch_us_stocks(include_sp500=sp500, include_nasdaq=nasdaq, include_djia=djia)
 
 
 # ─────────────────────────────────────────────────────────
@@ -66,7 +66,13 @@ with st.sidebar:
     else:
         include_tpex = False
 
-    use_us = st.checkbox("🇺🇸 美股 (S&P 500)", value=True)
+    use_us = st.checkbox("🇺🇸 美股", value=True)
+    if use_us:
+        use_sp500  = st.checkbox("S&P 500（約500檔）",    value=True)
+        use_nasdaq = st.checkbox("NASDAQ-100（約100檔）", value=True)
+        use_djia   = st.checkbox("道瓊工業（30檔）",      value=True)
+    else:
+        use_sp500 = use_nasdaq = use_djia = False
 
     # ── 週期設定 ──────────────────────────────────────────
     st.divider()
@@ -83,6 +89,11 @@ with st.sidebar:
     rsi_opts   = {"同K線": "same", "45分鐘": "45min", "1.5小時": "90min", "3小時": "180min"}
     rsi_lbl    = st.selectbox("RSI 週期", list(rsi_opts.keys()), index=1)
     rsi_tf     = rsi_opts[rsi_lbl]
+
+    ma_period  = st.number_input(
+        "MA 週期（均線天數）", min_value=5, max_value=250, value=20, step=1,
+        help="影響「收盤>MA」與「成交量均量」條件，預設20"
+    )
 
     # ── 買點條件 ──────────────────────────────────────────
     st.divider()
@@ -104,7 +115,7 @@ with st.sidebar:
     b_mac, _      = _row("MACD 黃金交叉",            key_chk="b_mac")
     b_rsi, b_rsi_v= _row("RSI >", has_val=True, val_default=50.0,
                           val_min=1.0, val_max=99.0, key_chk="b_rsi", key_val="b_rsi_v")
-    b_ma,  _      = _row("收盤 > MA20",              key_chk="b_ma")
+    b_ma,  _      = _row(f"收盤 > MA{int(ma_period)}", key_chk="b_ma")
     b_vol, b_vol_v= _row("成交量 > 均量 ×", has_val=True, val_default=1.5,
                           val_min=1.0, val_max=10.0, key_chk="b_vol", key_val="b_vol_v")
     b_mp,  b_mp_v = _row("收盤價 >", default=False, has_val=True, val_default=10.0,
@@ -126,7 +137,7 @@ with st.sidebar:
     s_mac, _      = _row("MACD 死亡交叉",            key_chk="s_mac")
     s_rsi, s_rsi_v= _row("RSI <", has_val=True, val_default=45.0,
                           val_min=1.0, val_max=99.0, key_chk="s_rsi", key_val="s_rsi_v")
-    s_ma,  _      = _row("跌破 MA20",                key_chk="s_ma")
+    s_ma,  _      = _row(f"跌破 MA{int(ma_period)}",  key_chk="s_ma")
     s_mp,  s_mp_v = _row("收盤價 <", default=False, has_val=True, val_default=10.0,
                           val_min=0.0, val_max=100000.0, key_chk="s_mp", key_val="s_mp_v")
 
@@ -147,6 +158,7 @@ cfg = {
     "base_interval": kline,
     "macd_tf":       macd_tf,
     "rsi_tf":        rsi_tf,
+    "ma_period":     int(ma_period),
 
     # Buy
     "buy_supertrex":       b_st,
@@ -189,9 +201,9 @@ if use_tw:
     with st.spinner("載入台股清單…"):
         tw_dict = _load_tw(include_tpex)
 
-if use_us:
-    with st.spinner("載入美股清單 (S&P 500)…"):
-        us_dict = _load_us()
+if use_us and (use_sp500 or use_nasdaq or use_djia):
+    with st.spinner("載入美股清單…"):
+        us_dict = _load_us(sp500=use_sp500, nasdaq=use_nasdaq, djia=use_djia)
 
 # Build task list
 tasks: list[tuple[str, str, str]] = []
