@@ -1,192 +1,249 @@
 """
-Core screening logic.
+screener.py — Flexible stock screener, all conditions configurable.
 
-Buy  conditions (5 items — all must pass, or user-defined minimum):
-  1. SuperTREX direction == Bullish (+1)
-  2. MACD golden cross within last CROSS_WINDOW bars
-  3. RSI > 50
-  4. Close > MA20
-  5. Volume > vol_MA20 × 1.5
+Config dict keys
+────────────────
+Timeframes
+  base_interval   : '15m' | '30m' | '1h' | '1d'
+  macd_tf         : 'same' | '45min' | '90min' | '180min'
+  rsi_tf          : 'same' | '45min' | '90min' | '180min'
 
-Sell conditions (4 items):
-  1. SuperTREX direction == Bearish (-1)
-  2. MACD death cross within last CROSS_WINDOW bars
-  3. RSI < 45
-  4. Close < MA20
+Buy conditions  (each can be enabled/disabled)
+  buy_supertrex        : bool  — SuperTREX buy flip within last N days
+  buy_supertrex_days   : int   — look-back window (calendar days, default 7)
+  buy_macd_golden      : bool  — MACD golden cross within last 20 bars
+  buy_rsi              : bool
+  buy_rsi_threshold    : float — default 50
+  buy_price_above_ma   : bool  — Close > MA20
+  buy_volume_spike     : bool
+  buy_volume_mult      : float — default 1.5
+  buy_min_price        : bool  — Close > threshold
+  buy_min_price_value  : float
+  buy_min_signals      : int   — minimum conditions that must pass
+
+Sell conditions (same pattern, prefix 'sell_')
+  sell_supertrex / sell_supertrex_days
+  sell_macd_death
+  sell_rsi / sell_rsi_threshold (default 45)
+  sell_price_below_ma
+  sell_min_price / sell_min_price_value
+  sell_min_signals
 """
 
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 import pandas as pd
 
 from data_fetcher import fetch_tw, fetch_us
 from indicators import add_all_indicators
-from stock_lists import TW_STOCKS, TW_STOCK_NAMES, US_STOCKS
 
 logger = logging.getLogger(__name__)
 
-CROSS_WINDOW = 20   # bars to look back for MACD crossover detection (~1 session)
+
+# ── Signal evaluation ─────────────────────────────────────
+
+def _recent_days(df: pd.DataFrame, calendar_days: int) -> pd.DataFrame:
+    cutoff = df.index[-1] - pd.Timedelta(days=calendar_days)
+    return df[df.index >= cutoff]
 
 
-# ─────────────────────────────────────────────────────────
-#  Signal checkers
-# ─────────────────────────────────────────────────────────
+def evaluate_buy(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
+    last    = df.iloc[-1]
+    bar20   = df.iloc[-min(20, len(df)):]
+    win5d   = _recent_days(df, cfg.get("buy_supertrex_days", 7))
+    signals : dict[str, bool] = {}
 
-def _buy_signals(df: pd.DataFrame) -> dict[str, bool]:
-    last   = df.iloc[-1]
-    recent = df.iloc[-CROSS_WINDOW:]
+    if cfg.get("buy_supertrex", True):
+        signals["SuperTREX買點(5日內)"] = bool(win5d["st_buy"].any())
 
-    ma20     = last["ma20"]
-    vol_ma20 = last["vol_ma20"]
+    if cfg.get("buy_macd_golden", True):
+        signals["MACD黃金交叉"] = bool(bar20["macd_golden"].any())
 
-    return {
-        "SuperTREX=Buy":  bool(last["st_dir"] == 1),
-        "MACD黃金交叉":    bool(recent["macd_golden"].any()),
-        "RSI>50":         bool(last["rsi"] > 50),
-        "收盤>MA20":       bool(last["Close"] > ma20)     if pd.notna(ma20)     else False,
-        "成交量爆量×1.5":  bool(last["Volume"] > vol_ma20 * 1.5) if pd.notna(vol_ma20) else False,
-    }
+    if cfg.get("buy_rsi", True):
+        thr = cfg.get("buy_rsi_threshold", 50)
+        signals[f"RSI>{int(thr)}"] = bool(last.get("rsi", 50) > thr)
 
+    if cfg.get("buy_price_above_ma", True):
+        ma = last.get("ma20")
+        signals["收盤>MA20"] = bool(last["Close"] > ma) if pd.notna(ma) else False
 
-def _sell_signals(df: pd.DataFrame) -> dict[str, bool]:
-    last   = df.iloc[-1]
-    recent = df.iloc[-CROSS_WINDOW:]
+    if cfg.get("buy_volume_spike", True):
+        mult    = cfg.get("buy_volume_mult", 1.5)
+        vol_ma  = last.get("vol_ma20")
+        signals[f"成交量>{mult}x均量"] = (
+            bool(last["Volume"] > vol_ma * mult) if pd.notna(vol_ma) else False
+        )
 
-    ma20 = last["ma20"]
+    if cfg.get("buy_min_price", False):
+        val = cfg.get("buy_min_price_value", 0)
+        signals[f"收盤>{val}"] = bool(last["Close"] > val)
 
-    return {
-        "SuperTREX=Sell": bool(last["st_dir"] == -1),
-        "MACD死亡交叉":    bool(recent["macd_death"].any()),
-        "RSI<45":         bool(last["rsi"] < 45),
-        "跌破MA20":        bool(last["Close"] < ma20) if pd.notna(ma20) else False,
-    }
+    return signals
 
 
-# ─────────────────────────────────────────────────────────
-#  Single-stock analysis
-# ─────────────────────────────────────────────────────────
+def evaluate_sell(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
+    last    = df.iloc[-1]
+    bar20   = df.iloc[-min(20, len(df)):]
+    win5d   = _recent_days(df, cfg.get("sell_supertrex_days", 7))
+    signals : dict[str, bool] = {}
+
+    if cfg.get("sell_supertrex", True):
+        signals["SuperTREX賣點(5日內)"] = bool(win5d["st_sell"].any())
+
+    if cfg.get("sell_macd_death", True):
+        signals["MACD死亡交叉"] = bool(bar20["macd_death"].any())
+
+    if cfg.get("sell_rsi", True):
+        thr = cfg.get("sell_rsi_threshold", 45)
+        signals[f"RSI<{int(thr)}"] = bool(last.get("rsi", 50) < thr)
+
+    if cfg.get("sell_price_below_ma", True):
+        ma = last.get("ma20")
+        signals["跌破MA20"] = bool(last["Close"] < ma) if pd.notna(ma) else False
+
+    if cfg.get("sell_min_price", False):
+        val = cfg.get("sell_min_price_value", 0)
+        signals[f"收盤<{val}"] = bool(last["Close"] < val)
+
+    return signals
+
+
+# ── Single-stock analysis ─────────────────────────────────
 
 def _analyze(
     stock_id: str,
     name: str,
     market: str,
-    interval: str,
+    cfg: dict,
 ) -> dict[str, Any] | None:
-    # Fetch
+    interval = cfg.get("base_interval", "15m")
     fetch_fn = fetch_tw if market == "TW" else fetch_us
+
     df = fetch_fn(stock_id, interval=interval)
     if df is None:
         return None
 
-    # Indicators
     try:
-        df = add_all_indicators(df)
+        df = add_all_indicators(
+            df,
+            base_interval=interval,
+            macd_tf=cfg.get("macd_tf", "same"),
+            rsi_tf =cfg.get("rsi_tf",  "same"),
+        )
     except Exception as exc:
-        logger.warning("Indicator error %s %s: %s", market, stock_id, exc)
+        logger.warning("Indicator error [%s %s]: %s", market, stock_id, exc)
         return None
 
-    if df.iloc[-1].isna().any():
-        pass  # allow partial NaN — individual checks guard with pd.notna()
-
-    last      = df.iloc[-1]
-    prev      = df.iloc[-2] if len(df) > 1 else last
-    change_pct = (
+    last = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) > 1 else last
+    chg  = (
         (float(last["Close"]) - float(prev["Close"])) / float(prev["Close"]) * 100
         if float(prev["Close"]) != 0 else 0.0
     )
 
-    buy  = _buy_signals(df)
-    sell = _sell_signals(df)
+    buy_sigs  = evaluate_buy(df, cfg)
+    sell_sigs = evaluate_sell(df, cfg)
 
     return {
         "stock_id":   stock_id,
         "name":       name,
         "market":     market,
         "close":      round(float(last["Close"]), 2),
-        "change_pct": round(change_pct, 2),
-        "rsi":        round(float(last["rsi"]), 1),
-        "ma20":       round(float(last["ma20"]), 2) if pd.notna(last["ma20"]) else None,
-        "macd_hist":  round(float(last["macd_hist"]), 4) if pd.notna(last["macd_hist"]) else None,
+        "change_pct": round(chg, 2),
+        "rsi":        round(float(last.get("rsi", 50)), 1),
+        "ma20":       round(float(last["ma20"]), 2)      if pd.notna(last.get("ma20"))     else None,
+        "macd_hist":  round(float(last["macd_hist"]), 4) if pd.notna(last.get("macd_hist")) else None,
         "supertrex":  "買入區 ▲" if last["st_dir"] == 1 else "賣出區 ▼",
-        "buy":        buy,
-        "sell":       sell,
-        "buy_count":  sum(buy.values()),
-        "sell_count": sum(sell.values()),
+        "buy_sigs":   buy_sigs,
+        "sell_sigs":  sell_sigs,
+        "buy_count":  sum(buy_sigs.values()),
+        "sell_count": sum(sell_sigs.values()),
+        "buy_total":  len(buy_sigs),
+        "sell_total": len(sell_sigs),
     }
 
 
-# ─────────────────────────────────────────────────────────
-#  Main screener entry point
-# ─────────────────────────────────────────────────────────
+# ── Main entry point ──────────────────────────────────────
 
 def run_screener(
-    markets: list[str],
-    interval: str = "15m",
-    buy_min: int = 5,
-    sell_min: int = 4,
+    tasks: list[tuple[str, str, str]],   # (stock_id, name, market)
+    cfg: dict,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    max_workers: int = 15,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Screen all stocks in the given markets.
+    Screen all stocks in tasks list.
 
     Returns
     -------
-    (buy_df, sell_df) — DataFrames of stocks meeting buy / sell thresholds.
+    (buy_df, sell_df)
     """
-    tasks: list[tuple[str, str, str]] = []
-    if "TW" in markets:
-        for sid in TW_STOCKS:
-            tasks.append((sid, TW_STOCK_NAMES.get(sid, sid), "TW"))
-    if "US" in markets:
-        for tkr in US_STOCKS:
-            tasks.append((tkr, tkr, "US"))
-
+    buy_min  = cfg.get("buy_min_signals",  5)
+    sell_min = cfg.get("sell_min_signals", 4)
     total    = len(tasks)
+    done     = [0]
+
     buy_rows : list[dict] = []
     sell_rows: list[dict] = []
 
-    for i, (stock_id, name, market) in enumerate(tasks):
-        if progress_callback:
-            progress_callback(i + 1, total, f"{market}:{stock_id}")
+    def _wrap(task: tuple) -> dict | None:
+        return _analyze(*task, cfg)
 
-        result = _analyze(stock_id, name, market, interval)
-        if result is None:
-            continue
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        fut_map = {ex.submit(_wrap, t): t for t in tasks}
 
-        base_row = {
-            "代號":      result["stock_id"],
-            "名稱":      result["name"],
-            "市場":      result["market"],
-            "收盤價":    result["close"],
-            "漲跌幅(%)": result["change_pct"],
-            "RSI":       result["rsi"],
-            "MA20":      result["ma20"],
-            "MACD柱狀":  result["macd_hist"],
-            "SuperTREX": result["supertrex"],
-        }
+        for fut in as_completed(fut_map):
+            done[0] += 1
+            t = fut_map[fut]
+            if progress_callback:
+                progress_callback(done[0], total, f"{t[2]}:{t[0]}")
 
-        if result["buy_count"] >= buy_min:
-            row = dict(base_row)
-            for k, v in result["buy"].items():
-                row[k] = "✓" if v else "✗"
-            row["符合條件"] = f"{result['buy_count']}/5"
-            buy_rows.append(row)
+            try:
+                result = fut.result()
+            except Exception as exc:
+                logger.warning("Future error: %s", exc)
+                continue
 
-        if result["sell_count"] >= sell_min:
-            row = dict(base_row)
-            for k, v in result["sell"].items():
-                row[k] = "✓" if v else "✗"
-            row["符合條件"] = f"{result['sell_count']}/4"
-            sell_rows.append(row)
+            if result is None:
+                continue
+
+            base = {
+                "代號":      result["stock_id"],
+                "名稱":      result["name"],
+                "市場":      result["market"],
+                "收盤價":    result["close"],
+                "漲跌幅(%)": result["change_pct"],
+                "RSI":       result["rsi"],
+                "MA20":      result["ma20"],
+                "MACD柱狀":  result["macd_hist"],
+                "SuperTREX": result["supertrex"],
+            }
+
+            if result["buy_count"] >= buy_min:
+                row = dict(base)
+                for k, v in result["buy_sigs"].items():
+                    row[k] = "✓" if v else "✗"
+                row["符合條件"] = f"{result['buy_count']}/{result['buy_total']}"
+                buy_rows.append(row)
+
+            if result["sell_count"] >= sell_min:
+                row = dict(base)
+                for k, v in result["sell_sigs"].items():
+                    row[k] = "✓" if v else "✗"
+                row["符合條件"] = f"{result['sell_count']}/{result['sell_total']}"
+                sell_rows.append(row)
 
     def _to_df(rows: list[dict]) -> pd.DataFrame:
         if not rows:
             return pd.DataFrame()
-        df = pd.DataFrame(rows)
-        df = df.sort_values("符合條件", ascending=False)
-        return df.reset_index(drop=True)
+        return (
+            pd.DataFrame(rows)
+            .sort_values("符合條件", ascending=False)
+            .reset_index(drop=True)
+        )
 
     return _to_df(buy_rows), _to_df(sell_rows)
