@@ -270,31 +270,109 @@ def _fetch_sp500_wiki() -> dict[str, str]:
         return {}
 
 
+def _fetch_nasdaq_trader() -> dict[str, str]:
+    """
+    Fetch all US stocks from NASDAQ Trader FTP symbol directory files.
+    Covers ~5 000 stocks across NASDAQ, NYSE, AMEX (excludes ETFs & test issues).
+    """
+    result: dict[str, str] = {}
+    urls = [
+        "https://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt",
+        "https://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt",
+    ]
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    for url in urls:
+        is_nasdaq = "nasdaqlisted" in url
+        try:
+            resp = requests.get(url, timeout=20, headers=headers)
+            resp.raise_for_status()
+            lines = resp.text.strip().splitlines()
+            if len(lines) < 2:
+                continue
+
+            header = [h.strip() for h in lines[0].split("|")]
+
+            # Column indices (field names differ between the two files)
+            try:
+                sym_col  = header.index("Symbol"      if is_nasdaq else "ACT Symbol")
+                name_col = header.index("Security Name")
+                etf_col  = header.index("ETF")
+                test_col = header.index("Test Issue")
+            except ValueError as exc:
+                logger.warning("Header parse error (%s): %s", url, exc)
+                continue
+
+            for line in lines[1:]:
+                parts = line.strip().split("|")
+                needed = max(sym_col, name_col, etf_col, test_col)
+                if len(parts) <= needed:
+                    continue
+
+                sym  = parts[sym_col].strip()
+                name = parts[name_col].strip()
+                etf  = parts[etf_col].strip().upper()
+                test = parts[test_col].strip().upper()
+
+                # Skip ETFs, test issues, and the trailing metadata line
+                if etf == "Y" or test == "Y":
+                    continue
+                if not sym or sym.lower().startswith("file"):
+                    continue
+
+                # Normalise dots → dashes (yfinance convention: BRK.B → BRK-B)
+                sym = sym.replace(".", "-")
+
+                # Accept 1–5 char purely alphabetic symbols (+ dash for class shares)
+                if not (1 <= len(sym) <= 6):
+                    continue
+                if not all(c.isalpha() or c == "-" for c in sym):
+                    continue
+
+                result[sym] = name
+
+        except Exception as exc:
+            logger.warning("NASDAQ Trader fetch failed (%s): %s", url, exc)
+
+    logger.info("NASDAQ Trader total: %d stocks", len(result))
+    return result
+
+
 def fetch_us_stocks(
     include_sp500:   bool = True,
     include_nasdaq:  bool = True,
     include_djia:    bool = True,
+    include_all:     bool = False,
 ) -> dict[str, str]:
     """
     Fetch US stocks based on selected indices.
-    S&P 500 is fetched dynamically from Wikipedia;
-    NASDAQ-100 and DJIA are from static lists.
+
+    include_all=True  → NASDAQ Trader full list (~5 000 stocks, slower)
+    Otherwise         → S&P 500 (Wikipedia) + NASDAQ-100 + DJIA static lists
     """
     result: dict[str, str] = {}
 
-    if include_djia:
-        result.update(DJIA)
-
-    if include_nasdaq:
-        result.update(NASDAQ100)
-
-    if include_sp500:
-        sp500 = _fetch_sp500_wiki()
-        if sp500:
-            result.update(sp500)
+    if include_all:
+        full = _fetch_nasdaq_trader()
+        if full:
+            result.update(full)
         else:
-            # Minimal fallback — static dict already covers most NASDAQ/DJIA
-            logger.warning("S&P 500 fallback: using NASDAQ-100 + DJIA only")
+            logger.warning("NASDAQ Trader fetch failed; falling back to index lists")
+            include_sp500 = include_nasdaq = include_djia = True
+
+    if not include_all:
+        if include_djia:
+            result.update(DJIA)
+
+        if include_nasdaq:
+            result.update(NASDAQ100)
+
+        if include_sp500:
+            sp500 = _fetch_sp500_wiki()
+            if sp500:
+                result.update(sp500)
+            else:
+                logger.warning("S&P 500 fallback: using NASDAQ-100 + DJIA only")
 
     logger.info("Total US stocks: %d", len(result))
     return result

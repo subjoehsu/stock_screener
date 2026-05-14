@@ -9,8 +9,8 @@ Timeframes
   rsi_tf          : 'same' | '45min' | '90min' | '180min'
 
 Buy conditions  (each can be enabled/disabled)
-  buy_supertrex        : bool  — SuperTREX buy flip within last N days
-  buy_supertrex_days   : int   — look-back window (calendar days, default 7)
+  buy_supertrex        : bool  — SuperTREX buy flip within last N hours
+  buy_supertrex_hours  : int   — look-back window (hours, default 120 = 5 days)
   buy_macd_golden      : bool  — MACD golden cross within last 20 bars
   buy_rsi              : bool
   buy_rsi_threshold    : float — default 50
@@ -22,7 +22,7 @@ Buy conditions  (each can be enabled/disabled)
   buy_min_signals      : int   — minimum conditions that must pass
 
 Sell conditions (same pattern, prefix 'sell_')
-  sell_supertrex / sell_supertrex_days
+  sell_supertrex / sell_supertrex_hours
   sell_macd_death
   sell_rsi / sell_rsi_threshold (default 45)
   sell_price_below_ma
@@ -46,19 +46,21 @@ logger = logging.getLogger(__name__)
 
 # ── Signal evaluation ─────────────────────────────────────
 
-def _recent_days(df: pd.DataFrame, calendar_days: int) -> pd.DataFrame:
-    cutoff = df.index[-1] - pd.Timedelta(days=calendar_days)
+def _recent_hours(df: pd.DataFrame, hours: int) -> pd.DataFrame:
+    """Return bars within the last `hours` calendar hours from the latest bar."""
+    cutoff = df.index[-1] - pd.Timedelta(hours=hours)
     return df[df.index >= cutoff]
 
 
 def evaluate_buy(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
     last    = df.iloc[-1]
     bar20   = df.iloc[-min(20, len(df)):]
-    win5d   = _recent_days(df, cfg.get("buy_supertrex_days", 7))
+    hours   = cfg.get("buy_supertrex_hours", 120)   # default 120 h ≈ 5 trading days
+    win     = _recent_hours(df, hours)
     signals : dict[str, bool] = {}
 
     if cfg.get("buy_supertrex", True):
-        signals["SuperTREX買點(5日內)"] = bool(win5d["st_buy"].any())
+        signals["SuperTREX買點"] = bool(win["st_buy"].any())
 
     if cfg.get("buy_macd_golden", True):
         signals["MACD黃金交叉"] = bool(bar20["macd_golden"].any())
@@ -89,11 +91,12 @@ def evaluate_buy(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
 def evaluate_sell(df: pd.DataFrame, cfg: dict) -> dict[str, bool]:
     last    = df.iloc[-1]
     bar20   = df.iloc[-min(20, len(df)):]
-    win5d   = _recent_days(df, cfg.get("sell_supertrex_days", 7))
+    hours   = cfg.get("sell_supertrex_hours", 120)
+    win     = _recent_hours(df, hours)
     signals : dict[str, bool] = {}
 
     if cfg.get("sell_supertrex", True):
-        signals["SuperTREX賣點(5日內)"] = bool(win5d["st_sell"].any())
+        signals["SuperTREX賣點"] = bool(win["st_sell"].any())
 
     if cfg.get("sell_macd_death", True):
         signals["MACD死亡交叉"] = bool(bar20["macd_death"].any())

@@ -43,14 +43,18 @@ def fetch_yfinance(
     ----------
     ticker   : Yahoo Finance ticker symbol (e.g. "AAPL" or "2330.TW")
     interval : "15m" | "30m" | "1h" | "1d"
-    days     : look-back window in calendar days (max 59 for intraday)
+    days     : look-back window in calendar days
+               (max 59 for intraday; up to 1095 for "1d")
 
     Returns
     -------
     DataFrame with columns [Open, High, Low, Close, Volume], or None on failure.
     """
-    end   = datetime.now()
-    start = end - timedelta(days=min(days, 59) if interval != "1d" else 365)
+    end = datetime.now()
+    if interval == "1d":
+        start = end - timedelta(days=min(days, 1095))
+    else:
+        start = end - timedelta(days=min(days, 59))
 
     try:
         raw = yf.download(
@@ -92,16 +96,16 @@ def fetch_yfinance(
 
 # ── Taiwan stocks ─────────────────────────────────────────
 
-def fetch_tw(stock_id: str, interval: str = "15m") -> pd.DataFrame | None:
+def fetch_tw(stock_id: str, interval: str = "15m", days: int = 59) -> pd.DataFrame | None:
     """Fetch a Taiwan stock (TWSE) using Yahoo Finance .TW suffix."""
-    return fetch_yfinance(f"{stock_id}.TW", interval=interval)
+    return fetch_yfinance(f"{stock_id}.TW", interval=interval, days=days)
 
 
 # ── US stocks ─────────────────────────────────────────────
 
-def fetch_us(ticker: str, interval: str = "15m") -> pd.DataFrame | None:
+def fetch_us(ticker: str, interval: str = "15m", days: int = 59) -> pd.DataFrame | None:
     """Fetch a US stock using Yahoo Finance."""
-    return fetch_yfinance(ticker, interval=interval)
+    return fetch_yfinance(ticker, interval=interval, days=days)
 
 
 # ── FinMind (optional, Taiwan daily) ──────────────────────
