@@ -180,13 +180,22 @@ def run_screener(
     cfg: dict,
     progress_callback: Callable[[int, int, str], None] | None = None,
     max_workers: int = 15,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Screen all stocks in tasks list.
 
     Returns
     -------
-    (buy_df, sell_df)
+    (buy_df, sell_df, scan_stats)
+
+    scan_stats keys:
+      total          : int   — tasks submitted
+      data_ok        : int   — stocks with valid data fetched
+      data_fail      : int   — stocks dropped (no data / < 130 bars)
+      buy_pass       : int   — stocks meeting buy threshold
+      sell_pass      : int   — stocks meeting sell threshold
+      near_buy       : int   — stocks at (buy_min - 1) signals  ← near-miss
+      near_sell      : int   — stocks at (sell_min - 1) signals ← near-miss
     """
     buy_min  = cfg.get("buy_min_signals",  5)
     sell_min = cfg.get("sell_min_signals", 4)
@@ -195,6 +204,12 @@ def run_screener(
 
     buy_rows : list[dict] = []
     sell_rows: list[dict] = []
+
+    # Stats counters
+    data_ok   = [0]
+    data_fail = [0]
+    near_buy  = [0]
+    near_sell = [0]
 
     def _wrap(task: tuple) -> dict | None:
         return _analyze(*task, cfg)
@@ -212,10 +227,14 @@ def run_screener(
                 result = fut.result()
             except Exception as exc:
                 logger.warning("Future error: %s", exc)
+                data_fail[0] += 1
                 continue
 
             if result is None:
+                data_fail[0] += 1
                 continue
+
+            data_ok[0] += 1
 
             base = {
                 "代號":      result["stock_id"],
@@ -229,19 +248,38 @@ def run_screener(
                 "SuperTREX": result["supertrex"],
             }
 
-            if result["buy_count"] >= buy_min:
+            bc = result["buy_count"]
+            sc = result["sell_count"]
+
+            if bc >= buy_min:
                 row = dict(base)
                 for k, v in result["buy_sigs"].items():
                     row[k] = "✓" if v else "✗"
-                row["符合條件"] = f"{result['buy_count']}/{result['buy_total']}"
+                row["符合條件"] = f"{bc}/{result['buy_total']}"
                 buy_rows.append(row)
+            elif buy_min > 1 and bc == buy_min - 1:
+                near_buy[0] += 1
 
-            if result["sell_count"] >= sell_min:
+            if sc >= sell_min:
                 row = dict(base)
                 for k, v in result["sell_sigs"].items():
                     row[k] = "✓" if v else "✗"
-                row["符合條件"] = f"{result['sell_count']}/{result['sell_total']}"
+                row["符合條件"] = f"{sc}/{result['sell_total']}"
                 sell_rows.append(row)
+            elif sell_min > 1 and sc == sell_min - 1:
+                near_sell[0] += 1
+
+    scan_stats = {
+        "total":      total,
+        "data_ok":    data_ok[0],
+        "data_fail":  data_fail[0],
+        "buy_pass":   len(buy_rows),
+        "sell_pass":  len(sell_rows),
+        "near_buy":   near_buy[0],
+        "near_sell":  near_sell[0],
+        "buy_min":    buy_min,
+        "sell_min":   sell_min,
+    }
 
     def _to_df(rows: list[dict]) -> pd.DataFrame:
         if not rows:
@@ -252,4 +290,4 @@ def run_screener(
             .reset_index(drop=True)
         )
 
-    return _to_df(buy_rows), _to_df(sell_rows)
+    return _to_df(buy_rows), _to_df(sell_rows), scan_stats

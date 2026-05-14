@@ -302,24 +302,70 @@ with tab_scan:
 
         with st.spinner("運算指標中，請稍候…"):
             try:
-                buy_df, sell_df = run_screener(tasks, cfg, progress_callback=_cb)
+                buy_df, sell_df, scan_stats = run_screener(tasks, cfg, progress_callback=_cb)
             except Exception as exc:
                 st.error(f"執行錯誤：{exc}")
                 st.stop()
 
         progress_bar.progress(1.0, text="✅ 完成！")
         status_slot.empty()
-        st.session_state["buy_df"]   = buy_df
-        st.session_state["sell_df"]  = sell_df
-        st.session_state["run_time"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        st.session_state["buy_df"]     = buy_df
+        st.session_state["sell_df"]    = sell_df
+        st.session_state["scan_stats"] = scan_stats
+        st.session_state["run_time"]   = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Display results
     if "buy_df" in st.session_state:
-        buy_df   = st.session_state["buy_df"]
-        sell_df  = st.session_state["sell_df"]
-        run_time = st.session_state.get("run_time", "")
+        buy_df     = st.session_state["buy_df"]
+        sell_df    = st.session_state["sell_df"]
+        run_time   = st.session_state.get("run_time", "")
+        scan_stats = st.session_state.get("scan_stats", {})
 
         st.subheader(f"選股結果　　*{run_time}*")
+
+        # ── 掃描透明度統計 ──────────────────────────────────
+        if scan_stats:
+            total     = scan_stats.get("total",     0)
+            ok        = scan_stats.get("data_ok",   0)
+            fail      = scan_stats.get("data_fail", 0)
+            b_pass    = scan_stats.get("buy_pass",  0)
+            s_pass    = scan_stats.get("sell_pass", 0)
+            near_b    = scan_stats.get("near_buy",  0)
+            near_s    = scan_stats.get("near_sell", 0)
+            b_min     = scan_stats.get("buy_min",   0)
+            s_min     = scan_stats.get("sell_min",  0)
+
+            with st.expander("🔬 掃描統計（點開查看完整漏斗分析）", expanded=True):
+                sc1, sc2, sc3, sc4 = st.columns(4)
+                sc1.metric("📋 清單收錄", f"{total:,} 檔")
+                sc2.metric(
+                    "✅ 資料有效",  f"{ok:,} 檔",
+                    delta=f"跳過 {fail:,} 檔（無資料/K棒不足）",
+                    delta_color="off",
+                )
+                sc3.metric(
+                    f"🟢 買點達標（≥{b_min}項）", f"{b_pass:,} 檔",
+                    delta=f"差一步 {near_b:,} 檔（{b_min-1}/{b_min}項）",
+                    delta_color="off",
+                )
+                sc4.metric(
+                    f"🔴 賣點達標（≥{s_min}項）", f"{s_pass:,} 檔",
+                    delta=f"差一步 {near_s:,} 檔（{s_min-1}/{s_min}項）",
+                    delta_color="off",
+                )
+
+                # Visual funnel
+                pct_ok   = ok   / total * 100 if total else 0
+                pct_bpass = b_pass / ok  * 100 if ok    else 0
+                st.markdown(
+                    f"""
+**漏斗流程：**
+`{total:,} 檔清單`
+→ 資料有效 **{ok:,} 檔**（{pct_ok:.0f}%，{fail:,} 檔因無資料/K棒不足被跳過）
+→ 買點達標 **{b_pass:,} 檔**（有效股的 {pct_bpass:.1f}%）
+→ 另有 **{near_b:,} 檔** 差一項就達標（可考慮將「最少符合買點項數」降低 1 格）
+                    """.strip()
+                )
 
         def _style(val: object) -> str:
             if val == "✓": return "color:#1e6823;font-weight:bold;background:#c6efce"
