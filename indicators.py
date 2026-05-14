@@ -35,6 +35,16 @@ _MINUTES: dict[str, int] = {
     "45min": 45, "1h": 60, "90min": 90, "180min": 180, "1d": 1440,
 }
 
+# Maximum calendar days yfinance allows per interval
+INTERVAL_MAX_DAYS: dict[str, int] = {
+    "1m":  7,
+    "5m":  60,
+    "15m": 60,
+    "30m": 60,
+    "1h":  730,
+    "1d":  3650,
+}
+
 
 # ── Helpers ───────────────────────────────────────────────
 

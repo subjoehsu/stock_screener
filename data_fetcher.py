@@ -18,6 +18,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
 
+from indicators import INTERVAL_MAX_DAYS
+
 logger = logging.getLogger(__name__)
 
 # Column names yfinance may return (handle both old and new versions)
@@ -50,11 +52,9 @@ def fetch_yfinance(
     -------
     DataFrame with columns [Open, High, Low, Close, Volume], or None on failure.
     """
-    end = datetime.now()
-    if interval == "1d":
-        start = end - timedelta(days=min(days, 1095))
-    else:
-        start = end - timedelta(days=min(days, 59))
+    end     = datetime.now()
+    max_d   = INTERVAL_MAX_DAYS.get(interval, 60)
+    start   = end - timedelta(days=min(days, max_d))
 
     try:
         raw = yf.download(
