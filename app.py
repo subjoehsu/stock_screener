@@ -1,11 +1,10 @@
 """
-SuperTREX 選股系統 — Streamlit Web App  (v4)
+SuperTREX 選股系統 — Streamlit Web App  (v5)
 
-v4 changes:
-  • K線增加 5 分鐘選項
-  • MACD / RSI 週期增加 5 分鐘、15 分鐘選項
-  • 回測分頁擁有獨立完整的 K線/指標/買賣點參數設定
-  • 回測支援任何 K線週期（分鐘線 ≤59 日；日線 ≤3 年）
+v5 changes:
+  • 盤後自動選股：台股 14:00 / 美股 08:00（台北時間）自動觸發
+  • 市場狀態面板：顯示盤後資料就緒狀況與下次更新倒數
+  • Session-key 快取失效：盤後 session key 改變時自動重抓股票清單
 
 Run locally : streamlit run app.py
 """
@@ -20,13 +19,14 @@ import streamlit as st
 
 from backtest import run_backtest
 from excel_export import build_excel
+from market_hours import market_status, combined_scan_key, tw_session_key, us_session_key
 from screener import run_screener
 from stock_lists import fetch_tw_stocks, fetch_us_stocks, DJIA, NASDAQ100
 
 logging.basicConfig(level=logging.WARNING)
 
 st.set_page_config(
-    page_title="SuperTREX 選股系統 v4",
+    page_title="SuperTREX 選股系統 v5",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -60,16 +60,20 @@ RSI_OPTS: dict[str, str] = {
 }
 
 # ─────────────────────────────────────────────────────────
-#  Cache stock lists (refresh every hour)
+#  Cache stock lists
+#  session_key changes after market close → forces re-fetch
 # ─────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_tw(include_tpex: bool) -> dict[str, str]:
+def _load_tw(include_tpex: bool, session_key: str = "") -> dict[str, str]:
+    """session_key is used only to bust the cache; unused inside the fn."""
     return fetch_tw_stocks(include_tpex=include_tpex)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_us(sp500: bool, nasdaq: bool, djia: bool, include_all: bool) -> dict[str, str]:
+def _load_us(sp500: bool, nasdaq: bool, djia: bool, include_all: bool,
+             session_key: str = "") -> dict[str, str]:
+    """session_key is used only to bust the cache; unused inside the fn."""
     return fetch_us_stocks(
         include_sp500=sp500,
         include_nasdaq=nasdaq,
@@ -205,6 +209,27 @@ with st.sidebar:
         value=min(sell_enabled, sell_enabled), key="sell_min",
     )
 
+    # ── ⑤ 盤後自動選股 ────────────────────────────────────
+    st.divider()
+    st.subheader("⑤ 盤後資料狀態")
+
+    mkt = market_status()
+    st.caption(f"🕐 現在時間：{mkt['now_str']}")
+
+    st.markdown(f"{mkt['tw_icon']} {mkt['tw_msg']}")
+    st.markdown(f"{mkt['us_icon']} {mkt['us_msg']}")
+
+    st.divider()
+    auto_scan = st.toggle(
+        "🤖 盤後自動選股",
+        value=False,
+        key="auto_scan_toggle",
+        help=(
+            "開啟後，每當台股（14:00 TPE）或美股（08:00 TPE）盤後資料就緒，"
+            "重新開啟此頁面時將自動執行一次選股掃描。"
+        ),
+    )
+
 
 # ─────────────────────────────────────────────────────────
 #  Screener config (from sidebar)
@@ -240,8 +265,8 @@ cfg = {
 # ─────────────────────────────────────────────────────────
 #  Main area — two tabs
 # ─────────────────────────────────────────────────────────
-st.title("📈 SuperTREX 選股系統 v4")
-st.caption("全市場掃描｜多指標多時框｜可選條件｜策略回測｜Excel 輸出")
+st.title("📈 SuperTREX 選股系統 v5")
+st.caption("全市場掃描｜多指標多時框｜可選條件｜策略回測｜Excel 輸出｜盤後自動更新")
 st.divider()
 
 tab_scan, tab_bt = st.tabs(["🔍 選股掃描", "📊 策略回測"])
@@ -251,18 +276,24 @@ tab_scan, tab_bt = st.tabs(["🔍 選股掃描", "📊 策略回測"])
 #  TAB 1 — Screener
 # ═════════════════════════════════════════════════════════
 with tab_scan:
-    # Load stock lists
+    # ── Session keys for cache-busting after market close ──
+    _tw_skey = tw_session_key()   # e.g. "TW-2025-05-14-post"
+    _us_skey = us_session_key()   # e.g. "US-2025-05-14-post"
+    _scan_key = combined_scan_key()
+
+    # Load stock lists (session_key busts cache when market closes)
     tw_dict: dict[str, str] = {}
     us_dict: dict[str, str] = {}
 
     if use_tw:
         with st.spinner("載入台股清單…"):
-            tw_dict = _load_tw(include_tpex)
+            tw_dict = _load_tw(include_tpex, session_key=_tw_skey)
 
     if use_us and (use_all_us or use_sp500 or use_nasdaq or use_djia):
         msg = "載入全部美股清單（~5 000 檔）…" if use_all_us else "載入美股清單…"
         with st.spinner(msg):
-            us_dict = _load_us(use_sp500, use_nasdaq, use_djia, use_all_us)
+            us_dict = _load_us(use_sp500, use_nasdaq, use_djia, use_all_us,
+                               session_key=_us_skey)
 
     tasks: list[tuple[str, str, str]] = (
         [(sid, n, "TW") for sid, n in tw_dict.items()] +
@@ -288,12 +319,27 @@ with tab_scan:
     )
     st.divider()
 
+    # ── Auto-scan trigger ──────────────────────────────────
+    # Fires once per market session when auto_scan toggle is ON
+    # and the combined session key has changed since last auto-scan.
+    _auto_done_key = st.session_state.get("auto_scan_done_key", "")
+    _trigger_auto  = (
+        auto_scan
+        and len(tasks) > 0
+        and _scan_key != _auto_done_key
+    )
+    if _trigger_auto:
+        st.info(
+            f"🤖 **盤後自動選股啟動中**…  "
+            f"（首次偵測到新盤後資料：{_scan_key}）"
+        )
+
     run_btn = st.button(
         "🔍  開始選股", type="primary",
         use_container_width=True, disabled=(len(tasks) == 0),
     )
 
-    if run_btn:
+    if run_btn or _trigger_auto:
         progress_bar = st.progress(0.0, text="準備中…")
         status_slot  = st.empty()
 
@@ -309,10 +355,12 @@ with tab_scan:
 
         progress_bar.progress(1.0, text="✅ 完成！")
         status_slot.empty()
-        st.session_state["buy_df"]     = buy_df
-        st.session_state["sell_df"]    = sell_df
-        st.session_state["scan_stats"] = scan_stats
-        st.session_state["run_time"]   = datetime.now().strftime("%Y-%m-%d %H:%M")
+        st.session_state["buy_df"]           = buy_df
+        st.session_state["sell_df"]          = sell_df
+        st.session_state["scan_stats"]       = scan_stats
+        st.session_state["run_time"]         = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Mark this session's scan key as done (prevents repeated auto-scan)
+        st.session_state["auto_scan_done_key"] = _scan_key
 
     # Display results
     if "buy_df" in st.session_state:
