@@ -3,5 +3,6 @@ yfinance>=0.2.40
 pandas>=2.0.0
 numpy>=1.24.0
 openpyxl>=3.1.0
-# Optional — Taiwan daily data via FinMind API
-# FinMind>=0.10.0
+requests>=2.28.0
+lxml>=4.9.0
+beautifulsoup4>=4.11.0
