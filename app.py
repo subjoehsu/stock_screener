@@ -20,6 +20,7 @@ import streamlit as st
 from backtest import run_backtest
 from excel_export import build_excel
 from market_hours import market_status, combined_scan_key, tw_session_key, us_session_key
+from scan_history import save_scan, list_scans, load_xlsx
 from screener import run_screener
 from stock_lists import fetch_tw_stocks, fetch_us_stocks, DJIA, NASDAQ100
 
@@ -355,12 +356,28 @@ with tab_scan:
 
         progress_bar.progress(1.0, text="✅ 完成！")
         status_slot.empty()
+        _run_time = datetime.now().strftime("%Y-%m-%d %H:%M")
         st.session_state["buy_df"]           = buy_df
         st.session_state["sell_df"]          = sell_df
         st.session_state["scan_stats"]       = scan_stats
-        st.session_state["run_time"]         = datetime.now().strftime("%Y-%m-%d %H:%M")
+        st.session_state["run_time"]         = _run_time
         # Mark this session's scan key as done (prevents repeated auto-scan)
         st.session_state["auto_scan_done_key"] = _scan_key
+
+        # ── Auto-save to history ───────────────────────────
+        _cfg_summary = {
+            "kline":    cfg.get("base_interval"),
+            "macd_tf":  cfg.get("macd_tf"),
+            "rsi_tf":   cfg.get("rsi_tf"),
+            "buy_min":  cfg.get("buy_min_signals"),
+            "sell_min": cfg.get("sell_min_signals"),
+        }
+        try:
+            _sid = save_scan(buy_df, sell_df, scan_stats,
+                             _run_time, _scan_key, _cfg_summary)
+            st.session_state["last_saved_scan_id"] = _sid
+        except Exception as _exc:
+            logger.warning("scan_history save error: %s", _exc)
 
     # Display results
     if "buy_df" in st.session_state:
@@ -455,6 +472,62 @@ with tab_scan:
             )
         except Exception as exc:
             st.warning(f"Excel 產生失敗：{exc}")
+
+    # ── 歷史掃描記錄 ─────────────────────────────────────────
+    st.divider()
+    st.subheader("📂 歷史掃描記錄（最近 10 天）")
+
+    _history = list_scans()
+
+    if not _history:
+        st.info("尚無歷史記錄。執行選股後將自動儲存。")
+    else:
+        # Header row
+        _hcols = st.columns([3, 2, 2, 2, 2, 1])
+        for _c, _h in zip(_hcols, ["掃描時間", "掃描股票", "資料有效", "買點達標", "賣點達標", "報表"]):
+            _c.markdown(f"**{_h}**")
+
+        for _rec in _history:
+            _stats  = _rec.get("scan_stats", {})
+            _rt     = _rec.get("run_time", _rec["scan_id"])
+            _sid    = _rec["scan_id"]
+            _is_new = (_sid == st.session_state.get("last_saved_scan_id", ""))
+
+            _tag    = " 🆕" if _is_new else ""
+            _cfg_s  = _rec.get("cfg_summary", {})
+            _kline  = _cfg_s.get("kline", "")
+            _label  = f"{_rt}{_tag}"
+            if _kline:
+                _label += f"  ·  K線:{_kline}"
+
+            _r1, _r2, _r3, _r4, _r5, _r6 = st.columns([3, 2, 2, 2, 2, 1])
+            _r1.write(_label)
+            _r2.write(f"{_stats.get('total', '-'):,} 檔")
+            _r3.write(f"{_stats.get('data_ok', '-'):,} 檔")
+            _r4.write(f"🟢 {_stats.get('buy_pass', '-')} 檔")
+            _r5.write(f"🔴 {_stats.get('sell_pass', '-')} 檔")
+
+            if _rec.get("has_xlsx"):
+                _xlsx_bytes = load_xlsx(_sid)
+                if _xlsx_bytes:
+                    _r6.download_button(
+                        "📥",
+                        data=_xlsx_bytes,
+                        file_name=f"SuperTREX_{_sid}.xlsx",
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument"
+                            ".spreadsheetml.sheet"
+                        ),
+                        key=f"hist_dl_{_sid}",
+                        help=f"下載 {_rt} 的 Excel 報表",
+                    )
+            else:
+                _r6.write("—")
+
+        st.caption(
+            f"共 {len(_history)} 筆記錄｜超過 10 天的報表自動刪除｜"
+            "每次掃描（手動或盤後自動）皆會自動儲存"
+        )
 
     st.divider()
     st.caption(
