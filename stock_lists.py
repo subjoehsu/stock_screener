@@ -250,11 +250,44 @@ def fetch_tw_stocks(include_tpex: bool = True) -> dict[str, str]:
 #  US stock fetchers
 # ─────────────────────────────────────────────────────────
 
-def _fetch_sp500_wiki() -> dict[str, str]:
-    """Fetch S&P 500 from Wikipedia."""
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+def _fetch_sp500_github() -> dict[str, str]:
+    """
+    Fetch S&P 500 from GitHub datasets CSV (most reliable, no HTML parsing).
+    https://github.com/datasets/s-and-p-500-companies
+    """
+    url = (
+        "https://raw.githubusercontent.com/datasets/"
+        "s-and-p-500-companies/main/data/constituents.csv"
+    )
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        tables = pd.read_html(url, attrs={"id": "constituents"})
+        resp = requests.get(url, timeout=15, headers=headers)
+        resp.raise_for_status()
+        df = pd.read_csv(StringIO(resp.text))
+        result: dict[str, str] = {}
+        for _, row in df.iterrows():
+            sym  = str(row.get("Symbol", "")).strip().replace(".", "-")
+            name = str(row.get("Name", "")).strip()
+            if sym and sym.lower() not in ("nan", ""):
+                result[sym] = name
+        logger.info("S&P 500 from GitHub CSV: %d stocks", len(result))
+        return result
+    except Exception as exc:
+        logger.warning("S&P 500 GitHub CSV failed: %s", exc)
+        return {}
+
+
+def _fetch_sp500_wiki() -> dict[str, str]:
+    """
+    Fetch S&P 500 from Wikipedia.
+    Uses requests + StringIO so lxml doesn't need to open the URL itself.
+    """
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        resp = requests.get(url, timeout=20, headers=headers)
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text), attrs={"id": "constituents"})
         df = tables[0]
         result: dict[str, str] = {}
         for _, row in df.iterrows():
@@ -267,6 +300,227 @@ def _fetch_sp500_wiki() -> dict[str, str]:
     except Exception as exc:
         logger.warning("S&P 500 wiki fetch failed: %s", exc)
         return {}
+
+
+# ── S&P 500 static fallback (major constituents, ~400 stocks) ────────────────
+# Used only when both GitHub CSV and Wikipedia are unreachable.
+# Covers the bulk of S&P 500 market cap; updated manually as needed.
+SP500_STATIC: dict[str, str] = {
+    # Financials
+    "JPM":"JPMorgan Chase",    "BAC":"Bank of America",  "WFC":"Wells Fargo",
+    "MS":"Morgan Stanley",     "GS":"Goldman Sachs",     "BLK":"BlackRock",
+    "SPGI":"S&P Global",       "MCO":"Moody's",          "C":"Citigroup",
+    "USB":"U.S. Bancorp",      "PNC":"PNC Financial",    "TFC":"Truist Financial",
+    "COF":"Capital One",       "AIG":"AIG",              "MET":"MetLife",
+    "PRU":"Prudential",        "AFL":"Aflac",            "ALL":"Allstate",
+    "CB":"Chubb",              "MMC":"Marsh McLennan",   "AON":"Aon",
+    "ICE":"Intercontinental",  "CME":"CME Group",        "NDAQ":"Nasdaq",
+    "SCHW":"Charles Schwab",   "BK":"BNY Mellon",        "STT":"State Street",
+    "FITB":"Fifth Third",      "RF":"Regions Financial", "CFG":"Citizens Financial",
+    "HBAN":"Huntington",       "MTB":"M&T Bank",         "KEY":"KeyCorp",
+    "DFS":"Discover",          "SYF":"Synchrony",        "AMP":"Ameriprise",
+    "TROW":"T. Rowe Price",    "IVZ":"Invesco",          "BEN":"Franklin Resources",
+    "FDS":"FactSet",           "MSCI":"MSCI",
+    # Healthcare
+    "LLY":"Eli Lilly",         "JNJ":"Johnson & Johnson","ABT":"Abbott",
+    "TMO":"Thermo Fisher",     "DHR":"Danaher",          "PFE":"Pfizer",
+    "BMY":"Bristol-Myers",     "CVS":"CVS Health",       "CI":"Cigna",
+    "HUM":"Humana",            "ELV":"Elevance Health",  "CNC":"Centene",
+    "MOH":"Molina Healthcare", "UHS":"Universal Health", "HCA":"HCA Healthcare",
+    "THC":"Tenet Healthcare",  "IQV":"IQVIA",            "A":"Agilent",
+    "WAT":"Waters Corp",       "MTD":"Mettler-Toledo",   "BIO":"Bio-Rad",
+    "HOLX":"Hologic",          "ALGN":"Align Technology","STE":"STERIS",
+    "EW":"Edwards Lifesciences","BSX":"Boston Scientific","MDT":"Medtronic",
+    "SYK":"Stryker",           "ZBH":"Zimmer Biomet",    "BDX":"Becton Dickinson",
+    "BAX":"Baxter",            "DXCM":"Dexcom",          "PODD":"Insulet",
+    "INCY":"Incyte",           "EXAS":"Exact Sciences",  "MASI":"Masimo",
+    "PKI":"PerkinElmer",       "DGX":"Quest Diagnostics","LH":"LabCorp",
+    "RMD":"ResMed",            "TFX":"Teleflex",         "XRAY":"Dentsply",
+    "VTRS":"Viatris",          "OGN":"Organon",          "MHK":"Mohawk Ind",
+    "GEHC":"GE HealthCare",    "SOLV":"Solventum",
+    # Energy
+    "XOM":"ExxonMobil",        "COP":"ConocoPhillips",   "SLB":"Schlumberger",
+    "EOG":"EOG Resources",     "PSX":"Phillips 66",      "MPC":"Marathon Petroleum",
+    "VLO":"Valero Energy",     "OXY":"Occidental",       "HAL":"Halliburton",
+    "BKR":"Baker Hughes",      "DVN":"Devon Energy",     "HES":"Hess",
+    "MRO":"Marathon Oil",      "APA":"APA Corp",         "FANG":"Diamondback E",
+    "PR":"Permian Resources",  "EQT":"EQT Corp",         "SWN":"Southwest Gas",
+    "RRC":"Range Resources",   "CNX":"CNX Resources",    "NOV":"NOV Inc",
+    "FTI":"TechnipFMC",        "WHD":"Cactus",           "TRGP":"Targa Resources",
+    "WMB":"Williams Companies","OKE":"ONEOK",             "KMI":"Kinder Morgan",
+    "LNG":"Cheniere Energy",   "ET":"Energy Transfer",
+    # Consumer Staples
+    "PG":"Procter & Gamble",   "KO":"Coca-Cola",         "PEP":"PepsiCo",
+    "PM":"Philip Morris",      "MO":"Altria",            "MDLZ":"Mondelez",
+    "KHC":"Kraft Heinz",       "GIS":"General Mills",    "CPB":"Campbell Soup",
+    "HRL":"Hormel Foods",      "SJM":"J.M. Smucker",     "CAG":"Conagra Brands",
+    "K":"Kellanova",           "MKC":"McCormick",        "CHD":"Church & Dwight",
+    "CL":"Colgate-Palmolive",  "CLX":"Clorox",           "KMB":"Kimberly-Clark",
+    "EL":"Estee Lauder",       "KVUE":"Kenvue",          "REVG":"Rev Group",
+    "TSN":"Tyson Foods",       "PPC":"Pilgrim's Pride",  "SAFM":"Sanderson Farms",
+    "WBA":"Walgreens",         "SYY":"Sysco",            "US":"US Foods",
+    "KR":"Kroger",             "ACI":"Albertsons",       "BJ":"BJ's Wholesale",
+    # Consumer Discretionary
+    "AMZN":"Amazon",           "TSLA":"Tesla",           "HD":"Home Depot",
+    "MCD":"McDonald's",        "NKE":"Nike",             "LOW":"Lowe's",
+    "TGT":"Target",            "TJX":"TJX Companies",    "ROST":"Ross Stores",
+    "BURL":"Burlington",       "GPS":"Gap",              "ANF":"Abercrombie",
+    "PVH":"PVH Corp",          "RL":"Ralph Lauren",      "URBN":"Urban Outfitters",
+    "HBI":"Hanesbrands",       "VFC":"VF Corp",          "TPR":"Tapestry",
+    "CPRI":"Capri Holdings",   "WWW":"Wolverine World",
+    "NVR":"NVR Inc",           "PHM":"PulteGroup",       "DHI":"D.R. Horton",
+    "LEN":"Lennar",            "TOL":"Toll Brothers",    "MDC":"MDC Holdings",
+    "LGIH":"LGI Homes",        "SKY":"Skyline Champion",
+    "GM":"General Motors",     "F":"Ford Motor",         "APTV":"Aptiv",
+    "LEA":"Lear Corp",         "BWA":"BorgWarner",       "MGA":"Magna Intl",
+    "TSCO":"Tractor Supply",   "DG":"Dollar General",    "DLTR":"Dollar Tree",
+    "AZO":"AutoZone",          "AAP":"Advance Auto",     "ORLY":"O'Reilly Auto",
+    "KMX":"CarMax",            "AN":"AutoNation",
+    "PAG":"Penske Auto",       "SAH":"Sonic Automotive",
+    "SBUX":"Starbucks",        "YUM":"Yum! Brands",      "QSR":"Restaurant Brands",
+    "DPZ":"Domino's Pizza",    "CMG":"Chipotle",         "SHAK":"Shake Shack",
+    "TXRH":"Texas Roadhouse",  "DRI":"Darden Restaurants",
+    "HLT":"Hilton",            "MAR":"Marriott",         "H":"Hyatt",
+    "WH":"Wyndham Hotels",     "IHG":"IHG Hotels",       "CHH":"Choice Hotels",
+    "LVS":"Las Vegas Sands",   "MGM":"MGM Resorts",      "WYNN":"Wynn Resorts",
+    "CZR":"Caesars",           "PENN":"PENN Entertainment",
+    "CCL":"Carnival",          "RCL":"Royal Caribbean",  "NCLH":"Norwegian Cruise",
+    "VAC":"Marriott Vacations", "HGV":"Hilton Grand",
+    "BKNG":"Booking Holdings", "EXPE":"Expedia",         "TRIP":"TripAdvisor",
+    "ABNB":"Airbnb",
+    "NWS":"News Corp",         "NWSA":"News Corp A",     "FOX":"Fox Corp",
+    "FOXA":"Fox Corp A",       "DIS":"Disney",           "WBD":"Warner Bros",
+    "PARA":"Paramount",        "LYV":"Live Nation",      "SEAS":"SeaWorld",
+    # Industrials
+    "GE":"GE Aerospace",       "RTX":"RTX Corp",         "LMT":"Lockheed Martin",
+    "NOC":"Northrop Grumman",  "BA":"Boeing",            "GD":"General Dynamics",
+    "LHX":"L3Harris",          "TDG":"TransDigm",        "HWM":"Howmet",
+    "AXON":"Axon Enterprise",  "SAIC":"SAIC",            "LDOS":"Leidos",
+    "BAH":"Booz Allen",        "DRS":"Leonardo DRS",
+    "UPS":"UPS",               "FDX":"FedEx",            "XPO":"XPO",
+    "JBHT":"J.B. Hunt",        "ODFL":"Old Dominion",    "SAIA":"Saia",
+    "RXO":"RXO Inc",           "CHRW":"C.H. Robinson",   "EXPD":"Expeditors",
+    "FWRD":"Forward Air",      "HUBG":"Hub Group",
+    "CSX":"CSX",               "UNP":"Union Pacific",    "NSC":"Norfolk Southern",
+    "CNI":"Canadian National", "CP":"Canadian Pacific",  "WAB":"Wabtec",
+    "TT":"Trane Technologies", "CARR":"Carrier",         "OTIS":"Otis",
+    "EMR":"Emerson Electric",  "ETN":"Eaton",            "ROK":"Rockwell Auto",
+    "AME":"AMETEK",            "PH":"Parker Hannifin",   "ITW":"Illinois Tool",
+    "DOV":"Dover",             "GWW":"W.W. Grainger",    "MSM":"MSC Industrial",
+    "FAST":"Fastenal",         "WSO":"Watsco",           "AIT":"Applied Ind",
+    "CNXC":"Concentrix",       "CTAS":"Cintas",          "RHI":"Robert Half",
+    "MAN":"ManpowerGroup",     "KELYA":"Kelly Services",
+    "WM":"Waste Management",   "RSG":"Republic Services","CWST":"Casella Waste",
+    "SRCL":"Stericycle",       "CLH":"Clean Harbors",
+    "CAT":"Caterpillar",       "DE":"Deere",             "AGCO":"AGCO",
+    "CNH":"CNH Industrial",    "PCAR":"PACCAR",          "TEX":"Terex",
+    "IR":"Ingersoll Rand",     "GNRC":"Generac",         "FELE":"Franklin Electric",
+    "RBC":"RBC Bearings",      "SPX":"SPX Technologies",
+    "MMM":"3M",                "HON":"Honeywell",        "GPC":"Genuine Parts",
+    "SWK":"Stanley Black&Decker","ALLE":"Allegion",      "AOS":"A.O. Smith",        "LII":"Lennox Intl",      "MAS":"Masco",
+    "FBHS":"Fortune Brands",   "TREX":"Trex",
+    # Technology (beyond NASDAQ-100)
+    "ACN":"Accenture",         "IBM":"IBM",              "HPQ":"HP Inc",
+    "HPE":"HP Enterprise",     "DXC":"DXC Technology",   "EPAM":"EPAM",
+    "CTSH":"Cognizant",        "IT":"Gartner",           "G":"Genpact",
+    "WEX":"WEX Inc",           "FIS":"FIS",              "FISV":"Fiserv",
+    "GPN":"Global Payments",   "JKHY":"Jack Henry",      "BR":"Broadridge",
+    "ADP":"ADP",               "PAYX":"Paychex",         "INFY":"Infosys",
+    "WIT":"Wipro",             "SAP":"SAP",              "ORCL":"Oracle",
+    "NOW":"ServiceNow",        "CRM":"Salesforce",       "WDAY":"Workday",
+    "VEEV":"Veeva Systems",    "HUBS":"HubSpot",         "ZI":"ZoomInfo",
+    "NCNO":"nCino",            "PCOR":"Procore",         "BILL":"Bill.com",
+    "TOST":"Toast",            "FOUR":"Shift4 Payments",
+    "DELL":"Dell Technologies","STX":"Seagate",
+    "WDC":"Western Digital",   "NTAP":"NetApp",          "PSTG":"Pure Storage",
+    "CRUS":"Cirrus Logic",     "SWKS":"Skyworks",        "QRVO":"Qorvo",
+    "KEYS":"Keysight",         "NATI":"NI Corp",         "TRMB":"Trimble",
+    "ITRI":"Itron",            "BDC":"Belden",
+    "VIAV":"Viavi Solutions",  "CIEN":"Ciena",           "LITE":"Lumentum",
+    "IIVI":"II-VI Incorporated", "COHU":"Cohu",
+    "GDDY":"GoDaddy",          "VRT":"Vertiv",           "SMCI":"Super Micro",
+    "NTDOY":"Nintendo",
+    # Communication Services
+    "T":"AT&T",                "VZ":"Verizon",           "TMUS":"T-Mobile",
+    "CHTR":"Charter Comm",     "CMCSA":"Comcast",        "DISH":"Dish Network",
+    "CABO":"Cable One",        "WOW":"WideOpenWest",
+    "OMC":"Omnicom",           "IPG":"Interpublic",      "WPP":"WPP",
+    "PUBM":"PubMatic",         "MGNI":"Magnite",         "IAS":"Integral Ad",
+    "EA":"Electronic Arts",    "TTWO":"Take-Two Intl",   "RBLX":"Roblox",
+    "U":"Unity Software",      "MTCH":"Match Group",     "BMBL":"Bumble",
+    "SNAP":"Snap",             "PINS":"Pinterest",       "RDDT":"Reddit",
+    # Materials
+    "LIN":"Linde",             "APD":"Air Products",     "ECL":"Ecolab",
+    "SHW":"Sherwin-Williams",  "PPG":"PPG Industries",   "IFF":"Intl Flavors",
+    "RPM":"RPM International", "FMC":"FMC Corp",         "CE":"Celanese",
+    "EMN":"Eastman Chemical",  "HUN":"Huntsman",         "CC":"Chemours",
+    "OLN":"Olin Corp",         "ASH":"Ashland",          "TROX":"Tronox",
+    "NEM":"Newmont",           "FCX":"Freeport-McMoRan", "NUE":"Nucor",
+    "STLD":"Steel Dynamics",   "RS":"Reliance Steel",    "CMC":"Commercial Metals",
+    "ATI":"ATI Inc",           "X":"U.S. Steel",         "CLF":"Cleveland-Cliffs",
+    "AA":"Alcoa",              "CENX":"Century Aluminum",
+    "VMC":"Vulcan Materials",  "MLM":"Martin Marietta",  "SUM":"Summit Materials",
+    "EXP":"Eagle Materials",   "USG":"USG Corp",
+    "IP":"International Paper","PKG":"Packaging Corp",   "SEE":"Sealed Air",
+    "SON":"Sonoco Products",   "SLVM":"Sylvamo",         "FIBK":"First Intermountain",
+    # Utilities
+    "NEE":"NextEra Energy",    "DUK":"Duke Energy",      "SO":"Southern Co",
+    "D":"Dominion Energy",     "AEP":"AEP",              "EXC":"Exelon",
+    "SRE":"Sempra",            "PCG":"PG&E",             "ED":"Consolidated Edison",
+    "ETR":"Entergy",           "FE":"FirstEnergy",       "PPL":"PPL Corp",
+    "CMS":"CMS Energy",        "AES":"AES Corp",         "NRG":"NRG Energy",
+    "VST":"Vistra",            "CEG":"Constellation",    "LNT":"Alliant Energy",
+    "EVRG":"Evergy",           "POR":"Portland General", "NWE":"NorthWestern",
+    "EIX":"Edison International","XEL":"Xcel Energy",   "PNW":"Pinnacle West",
+    "WEC":"WEC Energy",        "DTE":"DTE Energy",       "CNP":"CenterPoint",
+    "AWK":"American Water",    "SJW":"SJW Group",        "MSEX":"Middlesex Water",
+    "AWR":"American States",   "CWT":"California Water",
+    "ATO":"Atmos Energy",      "NI":"NiSource",          "SR":"Spire",
+    "OGS":"ONE Gas",           "UGI":"UGI Corp",
+    # Real Estate (REITs)
+    "AMT":"American Tower",    "PLD":"Prologis",         "EQIX":"Equinix",
+    "CCI":"Crown Castle",      "SPG":"Simon Property",   "O":"Realty Income",
+    "PSA":"Public Storage",    "EXR":"Extra Space",      "CUBE":"CubeSmart",
+    "LSI":"Life Storage",      "NSA":"National Storage",
+    "AVB":"AvalonBay",         "EQR":"Equity Residential","UDR":"UDR Inc",
+    "AIV":"Apartment Income",  "NMI":"NMI Holdings",
+    "WELL":"Welltower",        "VTR":"Ventas",           "PEAK":"Healthpeak",
+    "HR":"Healthcare Realty",  "OHI":"Omega Healthcare", "MPW":"Medical Properties",
+    "SBAC":"SBA Communications","UNIT":"Uniti Group",
+    "BXP":"BXP Inc",           "VNO":"Vornado",          "KIM":"Kimco Realty",
+    "REG":"Regency Centers",   "FRT":"Federal Realty",   "BRX":"Brixmor",
+    "RPAI":"InvenTrust",       "ESRT":"Empire State",
+    "DLR":"Digital Realty",    "IRM":"Iron Mountain",    "QTS":"QTS Realty",
+    "COR":"Coresite",          "CONE":"CyrusOne",        "SWCH":"Switch",
+    "GLPI":"Gaming & Leisure", "VICI":"VICI Properties", "MGP":"MGM Growth",
+    "EPR":"EPR Properties",    "SRC":"Spirit Realty",    "STOR":"STORE Capital",
+    "ADC":"Agree Realty",      "NNN":"NNN REIT",         "WPC":"W. P. Carey",
+    "PINE":"Alpine Income",    "NTST":"Netstreit",
+    # Additional large caps not in NASDAQ-100/DJIA
+    "BRK-B":"Berkshire Hathaway B", "BRK-A":"Berkshire Hathaway A",
+    "V":"Visa",                "MA":"Mastercard",        "PYPL":"PayPal",
+    "SQ":"Block Inc",          "AFRM":"Affirm",          "SOFI":"SoFi",
+    "WEX":"WEX Inc",
+    "UNH":"UnitedHealth",      "ABBV":"AbbVie",          "TMO":"Thermo Fisher",
+    "ABT":"Abbott",            "DHR":"Danaher",
+    "COST":"Costco",           "WMT":"Walmart",          "TGT":"Target",
+    "AMGN":"Amgen",            "GILD":"Gilead",          "REGN":"Regeneron",
+    "VRTX":"Vertex",           "MRNA":"Moderna",         "BIIB":"Biogen",
+    "LLY":"Eli Lilly",         "PFE":"Pfizer",           "BMY":"Bristol-Myers",
+    "MRK":"Merck",
+    "INTC":"Intel",            "TXN":"Texas Instruments","QCOM":"Qualcomm",
+    "AMAT":"Applied Materials","LRCX":"Lam Research",    "KLAC":"KLA",
+    "ADI":"Analog Devices",    "MCHP":"Microchip",       "ON":"ON Semi",
+    "NXPI":"NXP Semi",         "STM":"STMicro",          "WOLF":"Wolfspeed",
+    "ENPH":"Enphase",          "SEDG":"SolarEdge",       "RUN":"Sunrun",
+    "FSLR":"First Solar",      "ARRY":"Array Technologies",
+    "TSLA":"Tesla",            "GM":"General Motors",    "F":"Ford",
+    "RIVN":"Rivian",           "LCID":"Lucid",           "FSR":"Fisker",
+    "XYL":"Xylem",             "TRMK":"Trustmark",       "IEX":"IDEX Corp",
+    "DHX":"DHI Group",         "POOL":"Pool Corp",       "SSD":"Simpson Mfg",
+    "SITE":"SiteOne",          "BECN":"Beacon Roofing",  "IBP":"Install-Base",
+    "BLDR":"Builders FirstSource","MAS":"Masco",
+}
 
 
 def _fetch_nasdaq_trader() -> dict[str, str]:
@@ -367,11 +621,17 @@ def fetch_us_stocks(
             result.update(NASDAQ100)
 
         if include_sp500:
-            sp500 = _fetch_sp500_wiki()
+            # Try 3 sources in order: GitHub CSV → Wikipedia → embedded static
+            sp500 = _fetch_sp500_github()
+            if not sp500:
+                logger.warning("S&P 500 GitHub failed; trying Wikipedia…")
+                sp500 = _fetch_sp500_wiki()
             if sp500:
                 result.update(sp500)
+                logger.info("S&P 500 loaded: %d stocks", len(sp500))
             else:
-                logger.warning("S&P 500 fallback: using NASDAQ-100 + DJIA only")
+                logger.warning("S&P 500 all fetches failed; using static fallback")
+                result.update(SP500_STATIC)
 
     logger.info("Total US stocks: %d", len(result))
     return result
