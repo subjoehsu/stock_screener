@@ -19,10 +19,21 @@ import streamlit as st
 
 from backtest import run_backtest
 from excel_export import build_excel
+from gdrive import (
+    GDriveManager, google_packages_available,
+    build_manager_from_any_source, save_credentials_to_file,
+)
 from market_hours import market_status, combined_scan_key, tw_session_key, us_session_key
 from scan_history import save_scan, list_scans, load_xlsx
 from screener import run_screener
 from stock_lists import fetch_tw_stocks, fetch_us_stocks, DJIA, NASDAQ100
+
+# ── streamlit-autorefresh (optional) ──────────────────────
+try:
+    from streamlit_autorefresh import st_autorefresh as _st_autorefresh
+    _AUTOREFRESH_OK = True
+except ImportError:
+    _AUTOREFRESH_OK = False
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -210,26 +221,150 @@ with st.sidebar:
         value=min(sell_enabled, sell_enabled), key="sell_min",
     )
 
-    # ── ⑤ 盤後自動選股 ────────────────────────────────────
+    # ── ⑤ 盤後資料狀態 & 自動選股 ──────────────────────────
     st.divider()
     st.subheader("⑤ 盤後資料狀態")
 
     mkt = market_status()
     st.caption(f"🕐 現在時間：{mkt['now_str']}")
 
-    st.markdown(f"{mkt['tw_icon']} {mkt['tw_msg']}")
-    st.markdown(f"{mkt['us_icon']} {mkt['us_msg']}")
+    _tw_col, _us_col = st.columns(2)
+    with _tw_col:
+        st.markdown(f"{mkt['tw_icon']} {mkt['tw_msg']}")
+        auto_scan_tw = st.toggle(
+            "🇹🇼 台股自動選股",
+            value=False,
+            key="auto_scan_tw",
+            help="台股收盤後（14:00 TPE）偵測到盤後資料時自動觸發掃描",
+        )
+    with _us_col:
+        st.markdown(f"{mkt['us_icon']} {mkt['us_msg']}")
+        auto_scan_us = st.toggle(
+            "🇺🇸 美股自動選股",
+            value=False,
+            key="auto_scan_us",
+            help="美股收盤後（08:00 TPE 次日）偵測到盤後資料時自動觸發掃描",
+        )
 
+    if auto_scan_tw or auto_scan_us:
+        if _AUTOREFRESH_OK:
+            st.caption("🔄 已啟用自動監測，每 5 分鐘檢查一次盤後資料")
+        else:
+            st.caption("💡 安裝 streamlit-autorefresh 可啟用背景自動偵測")
+
+    # ── ⑥ Google Drive 同步 ────────────────────────────────
     st.divider()
-    auto_scan = st.toggle(
-        "🤖 盤後自動選股",
-        value=False,
-        key="auto_scan_toggle",
-        help=(
-            "開啟後，每當台股（14:00 TPE）或美股（08:00 TPE）盤後資料就緒，"
-            "重新開啟此頁面時將自動執行一次選股掃描。"
-        ),
-    )
+    st.subheader("⑥ Google Drive 同步")
+
+    # ── 連線狀態 ──────────────────────────────────────────
+    _gdm: GDriveManager | None = st.session_state.get("gdrive_mgr")
+    _gfolder: str              = st.session_state.get("gdrive_folder_id", "")
+    _gconn: bool               = st.session_state.get("gdrive_connected", False)
+
+    if _gconn and _gdm:
+        _guser = st.session_state.get("gdrive_user", "")
+        st.success(f"✅ 已連結：{_guser}")
+        if _gfolder:
+            st.caption(f"同步資料夾 ID：`{_gfolder}`")
+        if st.button("🔌 中斷連線", key="gdrive_disconnect"):
+            for k in ("gdrive_mgr","gdrive_connected","gdrive_user",
+                      "gdrive_folder_id","gdrive_creds"):
+                st.session_state.pop(k, None)
+            st.rerun()
+    else:
+        st.info("尚未連結 Google Drive")
+
+        if not google_packages_available():
+            st.warning(
+                "⚠️ Google 套件未安裝。\n\n"
+                "請確認 `requirements.txt` 含有：\n"
+                "```\ngoogle-auth>=2.22.0\n"
+                "google-api-python-client>=2.100.0\n```"
+            )
+        else:
+            with st.expander("🔧 設定說明", expanded=False):
+                st.markdown(
+                    """
+**步驟：**
+1. 前往 [Google Cloud Console](https://console.cloud.google.com/)
+2. 建立/選取專案 → 搜尋啟用 **Google Drive API**
+3. IAM → **服務帳戶** → 建立 → 下載 **JSON 金鑰**
+4. 在 Google Drive 建立資料夾，將服務帳戶的 `client_email` 加入**編輯者**
+5. 複製資料夾網址最後的 **資料夾 ID**
+
+> Streamlit Cloud 部署：將 JSON 金鑰內容貼入 Secrets → `[gdrive]` 區段
+                    """.strip()
+                )
+
+            _creds_file = st.file_uploader(
+                "上傳 Service Account JSON 金鑰",
+                type="json",
+                key="gdrive_upload",
+                help="從 Google Cloud Console 下載的服務帳戶 JSON 金鑰檔",
+            )
+            _creds_text = st.text_area(
+                "或直接貼上 JSON 內容",
+                height=100,
+                key="gdrive_paste",
+                placeholder='{"type":"service_account","project_id":"..."}',
+            )
+            _folder_id_input = st.text_input(
+                "Google Drive 資料夾 ID",
+                key="gdrive_folder_input",
+                placeholder="1aBcDeFgHiJkLmNo...",
+                help="資料夾網址最後一段，如 /folders/1aBcDeFg…",
+            )
+
+            if st.button("🔗 連結 Google Drive", key="gdrive_connect_btn",
+                         type="primary"):
+                _raw_creds: dict | None = None
+                if _creds_file:
+                    try:
+                        import json as _json
+                        _raw_creds = _json.loads(
+                            _creds_file.read().decode("utf-8")
+                        )
+                    except Exception as _e:
+                        st.error(f"JSON 解析失敗：{_e}")
+                elif _creds_text.strip():
+                    try:
+                        import json as _json
+                        _raw_creds = _json.loads(_creds_text.strip())
+                    except Exception as _e:
+                        st.error(f"JSON 解析失敗：{_e}")
+
+                if _raw_creds:
+                    try:
+                        _test_mgr = GDriveManager(_raw_creds)
+                        _ok, _info = _test_mgr.test_connection()
+                        if _ok:
+                            _folder = _folder_id_input.strip()
+                            st.session_state["gdrive_mgr"]       = _test_mgr
+                            st.session_state["gdrive_creds"]     = _raw_creds
+                            st.session_state["gdrive_connected"] = True
+                            st.session_state["gdrive_user"]      = _info
+                            st.session_state["gdrive_folder_id"] = _folder
+                            save_credentials_to_file(_raw_creds)  # local dev cache
+                            st.success(f"✅ 連結成功：{_info}")
+                            st.rerun()
+                        else:
+                            st.error(f"授權失敗：{_info}")
+                    except Exception as _e:
+                        st.error(f"連線錯誤：{_e}")
+                else:
+                    st.warning("請上傳 JSON 金鑰檔或貼上 JSON 內容")
+
+        # Try auto-connect from secrets / local file on first load
+        if not _gconn and google_packages_available():
+            if "gdrive_auto_tried" not in st.session_state:
+                st.session_state["gdrive_auto_tried"] = True
+                _auto_mgr, _auto_info = build_manager_from_any_source()
+                if _auto_mgr:
+                    st.session_state["gdrive_mgr"]       = _auto_mgr
+                    st.session_state["gdrive_connected"] = True
+                    st.session_state["gdrive_user"]      = _auto_info
+                    st.session_state["gdrive_folder_id"] = ""
+                    st.rerun()
 
 
 # ─────────────────────────────────────────────────────────
@@ -277,9 +412,16 @@ tab_scan, tab_bt = st.tabs(["🔍 選股掃描", "📊 策略回測"])
 #  TAB 1 — Screener
 # ═════════════════════════════════════════════════════════
 with tab_scan:
+    # ── Auto-refresh when monitoring is enabled ────────────
+    if (auto_scan_tw or auto_scan_us) and _AUTOREFRESH_OK:
+        _refresh_count = _st_autorefresh(
+            interval=5 * 60 * 1000,   # 5 minutes
+            key="market_auto_refresh",
+        )
+
     # ── Session keys for cache-busting after market close ──
-    _tw_skey = tw_session_key()   # e.g. "TW-2025-05-14-post"
-    _us_skey = us_session_key()   # e.g. "US-2025-05-14-post"
+    _tw_skey  = tw_session_key()    # e.g. "TW-2025-05-14-post"
+    _us_skey  = us_session_key()    # e.g. "US-2025-05-14-post"
     _scan_key = combined_scan_key()
 
     # Load stock lists (session_key busts cache when market closes)
@@ -320,20 +462,29 @@ with tab_scan:
     )
     st.divider()
 
-    # ── Auto-scan trigger ──────────────────────────────────
-    # Fires once per market session when auto_scan toggle is ON
-    # and the combined session key has changed since last auto-scan.
-    _auto_done_key = st.session_state.get("auto_scan_done_key", "")
-    _trigger_auto  = (
-        auto_scan
-        and len(tasks) > 0
-        and _scan_key != _auto_done_key
+    # ── Auto-scan trigger logic (TW & US independent) ─────
+    # TW fires once per day when tw_session_key flips to "post"
+    _trigger_tw = (
+        auto_scan_tw
+        and use_tw
+        and _tw_skey.endswith("-post")
+        and len(tw_dict) > 0
+        and _tw_skey != st.session_state.get("auto_scan_tw_done", "")
     )
-    if _trigger_auto:
-        st.info(
-            f"🤖 **盤後自動選股啟動中**…  "
-            f"（首次偵測到新盤後資料：{_scan_key}）"
-        )
+    # US fires once per day when us_session_key flips to "post"
+    _trigger_us = (
+        auto_scan_us
+        and use_us
+        and _us_skey.endswith("-post")
+        and len(us_dict) > 0
+        and _us_skey != st.session_state.get("auto_scan_us_done", "")
+    )
+    _trigger_auto = _trigger_tw or _trigger_us
+
+    if _trigger_tw:
+        st.info(f"🤖 **台股盤後自動選股啟動中**… （{_tw_skey}）")
+    if _trigger_us:
+        st.info(f"🤖 **美股盤後自動選股啟動中**… （{_us_skey}）")
 
     run_btn = st.button(
         "🔍  開始選股", type="primary",
@@ -357,14 +508,18 @@ with tab_scan:
         progress_bar.progress(1.0, text="✅ 完成！")
         status_slot.empty()
         _run_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        st.session_state["buy_df"]           = buy_df
-        st.session_state["sell_df"]          = sell_df
-        st.session_state["scan_stats"]       = scan_stats
-        st.session_state["run_time"]         = _run_time
-        # Mark this session's scan key as done (prevents repeated auto-scan)
-        st.session_state["auto_scan_done_key"] = _scan_key
+        st.session_state["buy_df"]    = buy_df
+        st.session_state["sell_df"]   = sell_df
+        st.session_state["scan_stats"] = scan_stats
+        st.session_state["run_time"]  = _run_time
 
-        # ── Auto-save to history ───────────────────────────
+        # Mark TW/US auto-scan keys as done for today
+        if _trigger_tw or run_btn:
+            st.session_state["auto_scan_tw_done"] = _tw_skey
+        if _trigger_us or run_btn:
+            st.session_state["auto_scan_us_done"] = _us_skey
+
+        # ── Auto-save to history (local + GDrive) ─────────
         _cfg_summary = {
             "kline":    cfg.get("base_interval"),
             "macd_tf":  cfg.get("macd_tf"),
@@ -372,10 +527,18 @@ with tab_scan:
             "buy_min":  cfg.get("buy_min_signals"),
             "sell_min": cfg.get("sell_min_signals"),
         }
+        _gdrive_mgr    = st.session_state.get("gdrive_mgr")
+        _gdrive_folder = st.session_state.get("gdrive_folder_id", "")
         try:
-            _sid = save_scan(buy_df, sell_df, scan_stats,
-                             _run_time, _scan_key, _cfg_summary)
+            _sid = save_scan(
+                buy_df, sell_df, scan_stats,
+                _run_time, _scan_key, _cfg_summary,
+                gdrive_mgr=_gdrive_mgr,
+                gdrive_folder_id=_gdrive_folder,
+            )
             st.session_state["last_saved_scan_id"] = _sid
+            if _gdrive_mgr and _gdrive_folder:
+                st.toast("☁️ 已同步至 Google Drive", icon="✅")
         except Exception as _exc:
             logger.warning("scan_history save error: %s", _exc)
 
@@ -487,32 +650,42 @@ with tab_scan:
         for _c, _h in zip(_hcols, ["掃描時間", "掃描股票", "資料有效", "買點達標", "賣點達標", "報表"]):
             _c.markdown(f"**{_h}**")
 
+        _gconn_hist = st.session_state.get("gdrive_connected", False)
+
+        # Column headers
+        _hc = st.columns([3, 2, 2, 2, 2, 1, 1])
+        for _col, _lbl in zip(_hc, ["掃描時間", "掃描股票", "資料有效",
+                                     "買點達標", "賣點達標", "本機", "雲端"]):
+            _col.markdown(f"**{_lbl}**")
+
         for _rec in _history:
             _stats  = _rec.get("scan_stats", {})
             _rt     = _rec.get("run_time", _rec["scan_id"])
             _sid    = _rec["scan_id"]
             _is_new = (_sid == st.session_state.get("last_saved_scan_id", ""))
-
-            _tag    = " 🆕" if _is_new else ""
             _cfg_s  = _rec.get("cfg_summary", {})
             _kline  = _cfg_s.get("kline", "")
-            _label  = f"{_rt}{_tag}"
+            _gfid   = _rec.get("gdrive_file_id", "")
+
+            _tag   = " 🆕" if _is_new else ""
+            _label = f"{_rt}{_tag}"
             if _kline:
-                _label += f"  ·  K線:{_kline}"
+                _label += f"  ·  {_kline}"
 
-            _r1, _r2, _r3, _r4, _r5, _r6 = st.columns([3, 2, 2, 2, 2, 1])
-            _r1.write(_label)
-            _r2.write(f"{_stats.get('total', '-'):,} 檔")
-            _r3.write(f"{_stats.get('data_ok', '-'):,} 檔")
-            _r4.write(f"🟢 {_stats.get('buy_pass', '-')} 檔")
-            _r5.write(f"🔴 {_stats.get('sell_pass', '-')} 檔")
+            _rc = st.columns([3, 2, 2, 2, 2, 1, 1])
+            _rc[0].write(_label)
+            _rc[1].write(f"{_stats.get('total', '-'):,} 檔")
+            _rc[2].write(f"{_stats.get('data_ok', '-'):,} 檔")
+            _rc[3].write(f"🟢 {_stats.get('buy_pass', '-')}")
+            _rc[4].write(f"🔴 {_stats.get('sell_pass', '-')}")
 
+            # Local download
             if _rec.get("has_xlsx"):
-                _xlsx_bytes = load_xlsx(_sid)
-                if _xlsx_bytes:
-                    _r6.download_button(
+                _xb = load_xlsx(_sid)
+                if _xb:
+                    _rc[5].download_button(
                         "📥",
-                        data=_xlsx_bytes,
+                        data=_xb,
                         file_name=f"SuperTREX_{_sid}.xlsx",
                         mime=(
                             "application/vnd.openxmlformats-officedocument"
@@ -521,11 +694,36 @@ with tab_scan:
                         key=f"hist_dl_{_sid}",
                         help=f"下載 {_rt} 的 Excel 報表",
                     )
+                else:
+                    _rc[5].write("—")
             else:
-                _r6.write("—")
+                _rc[5].write("—")
+
+            # GDrive link / upload button
+            if _gfid:
+                _link = f"https://drive.google.com/file/d/{_gfid}/view"
+                _rc[6].markdown(f"[☁️]({_link})")
+            elif _gconn_hist and _rec.get("has_xlsx"):
+                if _rc[6].button("⬆️", key=f"gd_up_{_sid}",
+                                 help="手動上傳此筆到 Google Drive"):
+                    _xb2 = load_xlsx(_sid)
+                    _gmgr2 = st.session_state.get("gdrive_mgr")
+                    _gfld2 = st.session_state.get("gdrive_folder_id", "")
+                    if _xb2 and _gmgr2 and _gfld2:
+                        try:
+                            _new_fid = _gmgr2.upload_excel(
+                                _xb2, f"SuperTREX_{_sid}.xlsx", _gfld2
+                            )
+                            st.toast(f"☁️ 已上傳至 Google Drive", icon="✅")
+                        except Exception as _ue:
+                            st.error(f"上傳失敗：{_ue}")
+                    else:
+                        st.warning("請先設定 Google Drive 資料夾 ID")
+            else:
+                _rc[6].write("—")
 
         st.caption(
-            f"共 {len(_history)} 筆記錄｜超過 10 天的報表自動刪除｜"
+            f"共 {len(_history)} 筆記錄  ·  超過 10 天的報表自動刪除  ·  "
             "每次掃描（手動或盤後自動）皆會自動儲存"
         )
 

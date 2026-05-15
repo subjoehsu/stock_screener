@@ -51,23 +51,27 @@ def _parse_ts(stem: str) -> datetime | None:
 # ─────────────────────────────────────────────────────────
 
 def save_scan(
-    buy_df:     pd.DataFrame,
-    sell_df:    pd.DataFrame,
-    scan_stats: dict[str, Any],
-    run_time:   str,
-    scan_key:   str,
+    buy_df:      pd.DataFrame,
+    sell_df:     pd.DataFrame,
+    scan_stats:  dict[str, Any],
+    run_time:    str,
+    scan_key:    str,
     cfg_summary: dict[str, Any] | None = None,
+    gdrive_mgr:  Any = None,
+    gdrive_folder_id: str = "",
 ) -> str:
     """
     Persist a scan result.
 
     Parameters
     ----------
-    buy_df / sell_df : screener output DataFrames
-    scan_stats       : dict from run_screener()
-    run_time         : display string  "YYYY-MM-DD HH:MM"
-    scan_key         : combined_scan_key() string
-    cfg_summary      : optional lightweight config dict for display
+    buy_df / sell_df   : screener output DataFrames
+    scan_stats         : dict from run_screener()
+    run_time           : display string  "YYYY-MM-DD HH:MM"
+    scan_key           : combined_scan_key() string
+    cfg_summary        : optional lightweight config dict for display
+    gdrive_mgr         : optional GDriveManager instance for cloud backup
+    gdrive_folder_id   : Google Drive folder ID to upload into
 
     Returns
     -------
@@ -85,23 +89,44 @@ def save_scan(
         ts = datetime.now()
     scan_id = ts.strftime("%Y%m%d_%H%M")
 
-    # ── Save Excel ─────────────────────────────────────────
-    xlsx_path = HISTORY_DIR / f"{scan_id}.xlsx"
+    # ── Build Excel bytes ──────────────────────────────────
+    xlsx_bytes: bytes | None = None
     try:
         xlsx_bytes = build_excel(buy_df, sell_df, run_time)
-        xlsx_path.write_bytes(xlsx_bytes)
     except Exception as exc:
-        logger.warning("scan_history: Excel save failed (%s): %s", scan_id, exc)
-        xlsx_bytes = None
+        logger.warning("scan_history: Excel build failed (%s): %s", scan_id, exc)
+
+    # ── Save Excel locally ─────────────────────────────────
+    if xlsx_bytes:
+        xlsx_path = HISTORY_DIR / f"{scan_id}.xlsx"
+        try:
+            xlsx_path.write_bytes(xlsx_bytes)
+        except Exception as exc:
+            logger.warning("scan_history: local Excel write failed (%s): %s",
+                           scan_id, exc)
+
+    # ── Upload to Google Drive ─────────────────────────────
+    gdrive_file_id: str = ""
+    if gdrive_mgr and gdrive_folder_id and xlsx_bytes:
+        try:
+            fname = f"SuperTREX_{scan_id}.xlsx"
+            gdrive_file_id = gdrive_mgr.upload_excel(
+                xlsx_bytes, fname, gdrive_folder_id
+            )
+            logger.info("scan_history: GDrive upload OK → %s", gdrive_file_id)
+        except Exception as exc:
+            logger.warning("scan_history: GDrive upload failed (%s): %s",
+                           scan_id, exc)
 
     # ── Save metadata JSON ──────────────────────────────────
     meta: dict[str, Any] = {
-        "scan_id":    scan_id,
-        "run_time":   run_time,
-        "scan_key":   scan_key,
-        "scan_stats": scan_stats,
-        "cfg_summary": cfg_summary or {},
-        "has_xlsx":   xlsx_bytes is not None,
+        "scan_id":       scan_id,
+        "run_time":      run_time,
+        "scan_key":      scan_key,
+        "scan_stats":    scan_stats,
+        "cfg_summary":   cfg_summary or {},
+        "has_xlsx":      xlsx_bytes is not None,
+        "gdrive_file_id": gdrive_file_id,
     }
     json_path = HISTORY_DIR / f"{scan_id}.json"
     try:

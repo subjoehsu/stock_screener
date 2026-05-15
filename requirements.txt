@@ -8,3 +8,6 @@ lxml>=4.9.0
 beautifulsoup4>=4.11.0
 plotly>=5.18.0
 tzdata>=2023.3
+streamlit-autorefresh>=0.0.1
+google-auth>=2.22.0
+google-api-python-client>=2.100.0
