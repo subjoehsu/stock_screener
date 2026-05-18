@@ -154,11 +154,11 @@ with st.sidebar:
                               key="sc_kline")
     kline     = KLINE_OPTS[kline_lbl]
 
-    macd_lbl  = st.selectbox("MACD 週期", list(MACD_OPTS.keys()), index=3,  # 預設 45分鐘
+    macd_lbl  = st.selectbox("MACD 週期", list(MACD_OPTS.keys()), index=2,  # 預設 15分鐘
                               key="sc_macd")
     macd_tf   = MACD_OPTS[macd_lbl]
 
-    rsi_lbl   = st.selectbox("RSI 週期",  list(RSI_OPTS.keys()),  index=3,  # 預設 45分鐘
+    rsi_lbl   = st.selectbox("RSI 週期",  list(RSI_OPTS.keys()),  index=2,  # 預設 15分鐘
                               key="sc_rsi")
     rsi_tf    = RSI_OPTS[rsi_lbl]
 
@@ -233,7 +233,7 @@ with st.sidebar:
         st.markdown(f"{mkt['tw_icon']} {mkt['tw_msg']}")
         auto_scan_tw = st.toggle(
             "🇹🇼 台股自動選股",
-            value=False,
+            value=True,
             key="auto_scan_tw",
             help="台股收盤後（14:00 TPE）偵測到盤後資料時自動觸發掃描",
         )
@@ -241,7 +241,7 @@ with st.sidebar:
         st.markdown(f"{mkt['us_icon']} {mkt['us_msg']}")
         auto_scan_us = st.toggle(
             "🇺🇸 美股自動選股",
-            value=False,
+            value=True,
             key="auto_scan_us",
             help="美股收盤後（08:00 TPE 次日）偵測到盤後資料時自動觸發掃描",
         )

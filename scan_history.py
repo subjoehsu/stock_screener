@@ -25,7 +25,11 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-HISTORY_DIR = Path("scan_history")
+# 本機歷史記錄目錄（優先使用絕對路徑；若不存在則退回相對路徑）
+_ABS_HISTORY = Path(r"C:\Users\user\OneDrive\桌面\claude-Code\台美股選股機")
+HISTORY_DIR  = _ABS_HISTORY if _ABS_HISTORY.exists() or _ABS_HISTORY.parent.exists() \
+               else Path("scan_history")
+
 MAX_DAYS    = 10          # 超過幾天的記錄自動刪除
 MAX_RECORDS = 50          # 最多保留幾筆（防止意外累積）
 
