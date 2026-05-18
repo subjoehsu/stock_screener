@@ -221,7 +221,7 @@ with st.sidebar:
         value=min(sell_enabled, sell_enabled), key="sell_min",
     )
 
-    # ── ⑤ 盤後資料狀態 & 自動選股 ──────────────────────────
+    # ── ⑤ 盤後資料狀態 ────────────────────────────────────
     st.divider()
     st.subheader("⑤ 盤後資料狀態")
 
@@ -231,26 +231,8 @@ with st.sidebar:
     _tw_col, _us_col = st.columns(2)
     with _tw_col:
         st.markdown(f"{mkt['tw_icon']} {mkt['tw_msg']}")
-        auto_scan_tw = st.toggle(
-            "🇹🇼 台股自動選股",
-            value=True,
-            key="auto_scan_tw",
-            help="台股收盤後（14:00 TPE）偵測到盤後資料時自動觸發掃描",
-        )
     with _us_col:
         st.markdown(f"{mkt['us_icon']} {mkt['us_msg']}")
-        auto_scan_us = st.toggle(
-            "🇺🇸 美股自動選股",
-            value=True,
-            key="auto_scan_us",
-            help="美股收盤後（08:00 TPE 次日）偵測到盤後資料時自動觸發掃描",
-        )
-
-    if auto_scan_tw or auto_scan_us:
-        if _AUTOREFRESH_OK:
-            st.caption("🔄 已啟用自動監測，每 5 分鐘檢查一次盤後資料")
-        else:
-            st.caption("💡 安裝 streamlit-autorefresh 可啟用背景自動偵測")
 
     # ── ⑥ Google Drive 同步 ────────────────────────────────
     st.divider()
@@ -412,13 +394,6 @@ tab_scan, tab_bt = st.tabs(["🔍 選股掃描", "📊 策略回測"])
 #  TAB 1 — Screener
 # ═════════════════════════════════════════════════════════
 with tab_scan:
-    # ── Auto-refresh when monitoring is enabled ────────────
-    if (auto_scan_tw or auto_scan_us) and _AUTOREFRESH_OK:
-        _refresh_count = _st_autorefresh(
-            interval=5 * 60 * 1000,   # 5 minutes
-            key="market_auto_refresh",
-        )
-
     # ── Session keys for cache-busting after market close ──
     _tw_skey  = tw_session_key()    # e.g. "TW-2025-05-14-post"
     _us_skey  = us_session_key()    # e.g. "US-2025-05-14-post"
@@ -462,36 +437,12 @@ with tab_scan:
     )
     st.divider()
 
-    # ── Auto-scan trigger logic (TW & US independent) ─────
-    # TW fires once per day when tw_session_key flips to "post"
-    _trigger_tw = (
-        auto_scan_tw
-        and use_tw
-        and _tw_skey.endswith("-post")
-        and len(tw_dict) > 0
-        and _tw_skey != st.session_state.get("auto_scan_tw_done", "")
-    )
-    # US fires once per day when us_session_key flips to "post"
-    _trigger_us = (
-        auto_scan_us
-        and use_us
-        and _us_skey.endswith("-post")
-        and len(us_dict) > 0
-        and _us_skey != st.session_state.get("auto_scan_us_done", "")
-    )
-    _trigger_auto = _trigger_tw or _trigger_us
-
-    if _trigger_tw:
-        st.info(f"🤖 **台股盤後自動選股啟動中**… （{_tw_skey}）")
-    if _trigger_us:
-        st.info(f"🤖 **美股盤後自動選股啟動中**… （{_us_skey}）")
-
     run_btn = st.button(
         "🔍  開始選股", type="primary",
         use_container_width=True, disabled=(len(tasks) == 0),
     )
 
-    if run_btn or _trigger_auto:
+    if run_btn:
         progress_bar = st.progress(0.0, text="準備中…")
         status_slot  = st.empty()
 
@@ -512,12 +463,6 @@ with tab_scan:
         st.session_state["sell_df"]   = sell_df
         st.session_state["scan_stats"] = scan_stats
         st.session_state["run_time"]  = _run_time
-
-        # Mark TW/US auto-scan keys as done for today
-        if _trigger_tw or run_btn:
-            st.session_state["auto_scan_tw_done"] = _tw_skey
-        if _trigger_us or run_btn:
-            st.session_state["auto_scan_us_done"] = _us_skey
 
         # ── Auto-save to history (local + GDrive) ─────────
         _cfg_summary = {
